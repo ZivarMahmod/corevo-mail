@@ -10,6 +10,20 @@ const account = {
 };
 const result = data => ({ schemaVersion: 'personal-mailbox-v1', checkedAt: new Date().toISOString(), data });
 
+test('failed provider refresh does not claim complete unread counts', async () => {
+  const transport = createMailboxTransport(async action => {
+    if (action === 'accounts') return result({ items: [account] });
+    throw Object.assign(new Error('provider failed'), { code: 'provider_unavailable' });
+  });
+  const id = (await transport.request('/api/accounts')).body[0].id;
+  const refresh = await transport.request('/api/mail/corevo-sync', 'POST', JSON.stringify({ accountId: id, folder: 'INBOX' }));
+  expect(refresh.status).toBe(200);
+  expect(refresh.body.items[0].state).toBe('unavailable');
+  expect(refresh.body.counts.complete).toBe(false);
+  expect(refresh.body.counts.total).toBeNull();
+  transport.dispose();
+});
+
 test('account generations never rebind stale client IDs and private bindings stay in the host', async () => {
   const calls = [];
   let current = structuredClone(account);
@@ -61,7 +75,8 @@ test('IMAP credentials never reach the backend over insecure transport or disabl
   expect((await secure.request('/api/accounts', 'POST', JSON.stringify({ ...form, imap_skip_tls_verify: true }))).status).toBe(422);
   expect(calls).toHaveLength(0);
   expect((await secure.request('//evil.example/api/accounts')).status).toBe(400);
-  expect((await secure.request('/api/mail/send', 'POST', '{}')).status).toBe(501);
+  expect((await secure.request('/api/mail/send', 'POST', '{}')).status).toBe(409);
+  expect(calls).toHaveLength(0);
 });
 
 test('mount cancellation rejects a late account result without returning stale data', async () => {
@@ -156,7 +171,7 @@ test('provider text is escaped and attachment download uses a freshly verified m
     if (action === 'accounts') return result({ items: [account] });
     if (action === 'folders') return result({ items: providerFolders.map(f => ({ ...f, childFolderCount: 0 })), wellKnown: { inbox: 'inbox-id' }, nextCursor: null });
     if (action === 'browse') return result({ items: [providerMessage()], nextCursor: null });
-    if (action === 'message') return result({ ...providerMessage(), body: { contentType: 'text', content: '<img src=x onerror=alert(1)> & text' }, attachments: [{ id: 'attachment-id', name: 'test.txt', type: 'text/plain', size: 4 }] });
+    if (action === 'message') return result({ ...providerMessage(), body: { contentType: 'text', content: '<img src=x onerror=alert(1)> & text' }, attachments: [{ id: 'attachment-id', name: 'test.txt', type: 'file', size: 4 }] });
     return result({ bytesBase64: btoa('test'), byteLength: 4 });
   });
   await transport.inventory();
@@ -165,7 +180,7 @@ test('provider text is escaped and attachment download uses a freshly verified m
   expect(body.body.html).toContain('&lt;img');
   expect(body.body.html).not.toContain('<img');
   const file = await transport.request(`/api/mail/messages/${id}/attachments/attachment-id`);
-  expect(file).toMatchObject({ status: 200, bytes: [116, 101, 115, 116], contentType: 'text/plain' });
+  expect(file).toMatchObject({ status: 200, bytes: [116, 101, 115, 116], contentType: 'application/octet-stream' });
   expect(calls.at(-1)).toEqual(['attachment', { mailbox: { mailboxId: 'mailbox', connectionId: 'connection', generation: 'generation-1', scopeRevision: 'scope-1' }, messageId: 'provider-message-0', attachmentId: 'attachment-id', expectedRevisionHash: 'verified-revision' }]);
   expect((await transport.request(`/api/mail/messages/${id}/attachments/unknown`)).status).toBe(404);
 });

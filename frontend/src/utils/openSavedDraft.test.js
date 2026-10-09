@@ -52,6 +52,14 @@ test('maps plain text and flags external attachments for safe handling', () => {
   assert.deepEqual(data.forwardedAttachments, [{ messageId: 'external', part: '2', filename: 'file.txt', size: 12 }]);
 });
 
+test('the Corevo provider detail can prove complete attachments without trusting an incomplete list row', () => {
+  const row = { ...draft, attachments_complete: undefined, has_attachments: true };
+  const body = { text: 'provider draft', attachments_complete: true, attachments: [{ part: 'owned-part', filename: 'proof.txt', size: 12 }] };
+  assert.equal(savedDraftToComposeData(row, body).unresolvedExternalAttachments, false);
+  assert.equal(savedDraftToComposeData(row, { ...body, attachments: [] }).unresolvedExternalAttachments, true);
+  assert.equal(savedDraftToComposeData(row, { ...body, attachments_complete: false }).unresolvedExternalAttachments, true);
+});
+
 test('reopens a draft from a configured alias with that same sender', () => {
   const data = savedDraftToComposeData({ ...draft, from_email: 'alias@example.test' },
     { text: 'reply' }, [{ id: 'account-1', email_address: 'main@example.test',

@@ -1,4 +1,6 @@
 import { corevoFetch } from './corevoTransport.js';
+import DOMPurify from 'dompurify';
+import { composeContent } from '../../../../../src/modules/mail/compose-content.mjs';
 const BASE = '/api';
 
 // Sent on every /api request so the backend CSRF guard accepts it. A cross-site
@@ -108,6 +110,22 @@ function getMessageBody(id, remoteImages = false) {
   const existing = messageBodyRequests.get(key);
   if (existing) return existing;
   const promise = request('GET', `/mail/messages/${id}/body${remoteImages ? '?remoteImages=1' : ''}`)
+    .then(body => {
+      if (!window.corevoMailHosted || typeof body?.html !== 'string') return body;
+      const html = DOMPurify.sanitize(body.html, { FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select', 'iframe', 'object', 'embed', 'base', 'meta', 'link'], FORBID_ATTR: ['srcset', 'ping'] });
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      for (const el of doc.querySelectorAll('[src]')) {
+        const src = el.getAttribute('src');
+        if (!/^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/i.test(src)) el.removeAttribute('src');
+      }
+      // Keep presentation properties that cannot initiate a remote resource fetch, including in quoted replies.
+      const allowed = /^(?:color|background-color|font-family|font-size|font-style|font-weight|text-align|text-decoration|white-space|line-height|width|height|max-width|margin(?:-(?:top|right|bottom|left))?|padding(?:-(?:top|right|bottom|left))?|border(?:-(?:top|right|bottom|left))?(?:-(?:width|style|color))?|border-collapse)$/;
+      for (const el of doc.querySelectorAll('[style]')) {
+        for (const property of Array.from(el.style)) if (!allowed.test(property)) el.style.removeProperty(property);
+      }
+      for (const el of doc.querySelectorAll('a')) { el.setAttribute('rel', 'noopener noreferrer'); el.setAttribute('target', '_blank'); }
+      return { ...body, html: doc.body.innerHTML, hasBlockedRemoteImages: false };
+    })
     .finally(() => messageBodyRequests.delete(key));
   messageBodyRequests.set(key, promise);
   return promise;
@@ -130,7 +148,7 @@ async function endPushSubscription() {
 
 export const api = {
   get: (path) => request('GET', path),
-  post: (path, body, extraHeaders) => request('POST', path, body, extraHeaders),
+  post: (path, body, extraHeaders) => request('POST', path, window.corevoMailHosted && ['/mail/review', '/mail/send'].includes(path) ? { ...body, corevoContent: composeContent(body) } : body, extraHeaders),
   put: (path, body) => request('PUT', path, body),
   patch: (path, body) => request('PATCH', path, body),
   delete: (path) => request('DELETE', path),
@@ -339,6 +357,7 @@ export const api = {
   copyMessage: (id, folder) => request('POST', `/mail/messages/${encodeURIComponent(id)}/copy`, { folder }),
   bulkArchive: (ids) => request('POST', '/mail/messages/bulk-archive', { ids }),
   getUnreadCounts: () => request('GET', '/mail/unread-counts'),
+  corevoSync: (body) => request('POST', '/mail/corevo-sync', body),
 
   // Mailbox cleanup (read-only analysis; actual cleanup reuses bulkDelete above).
   mailboxUsage: (accountId) => request('GET', `/mail/mailbox-usage?accountId=${encodeURIComponent(accountId)}`),
@@ -451,7 +470,7 @@ export const api = {
     const params = new URLSearchParams(Object.entries(options).filter(([, value]) => value !== undefined));
     return request('GET', `/mail/messages/${encodeURIComponent(id)}/reply-draft?${params}`);
   },
-  saveDraft:   (data)              => request('POST',   '/mail/draft', data),
+  saveDraft:   (data)              => request('POST',   '/mail/draft', window.corevoMailHosted ? { ...data, corevoContent: composeContent(data) } : data),
   deleteDraft: (accountId, uid, folder) =>
     request('DELETE', `/mail/draft/${uid}?accountId=${encodeURIComponent(accountId)}&folder=${encodeURIComponent(folder)}`),
 

@@ -43,7 +43,7 @@ export function savedDraftToComposeData(draft, bodyData, accounts = []) {
     isReply: Boolean(draft.in_reply_to || draft.thread_references),
     externalAttachments: externalAttachments.length || draft.has_attachments ? externalAttachments.length ? externalAttachments : [{}] : [],
     forwardedAttachments: knownAttachments.map(a => ({ messageId: draft.id, part: a.part, filename: a.filename, size: a.size })),
-    unresolvedExternalAttachments: draft.attachments_complete !== true
+    unresolvedExternalAttachments: draft.attachments_complete !== true && bodyData?.attachments_complete !== true
       || Boolean(draft.has_attachments && !externalAttachments.length)
       || knownAttachments.length !== externalAttachments.length,
   };

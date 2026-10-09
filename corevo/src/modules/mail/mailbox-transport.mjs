@@ -1,4 +1,5 @@
 // AGPL-3.0: public adapter to the host's already-authorized mailbox interface.
+import { mailboxUUID } from './mailbox-uuid.mjs';
 const profile = 'personal-mail-readwrite-send';
 const errors = {
   reconnect_required: 'Anslut brevlådan igen hos leverantören.',
@@ -12,15 +13,18 @@ const errors = {
   revision_conflict: 'Meddelandet har ändrats hos leverantören. Hämta det igen innan du fortsätter.',
   operation_unknown: 'Utfallet kunde inte hämtas. Ingen ny leverantörsåtgärd har skickats.',
   provider_rejected: 'Leverantören avvisade ändringen.',
+  local_journal_unavailable: 'Mejlåtgärdens identifierare kunde inte sparas säkert. Ingen ny leverantörsåtgärd skickades.',
 };
 const reply = (body, status = 200) => ({ status, body });
 const fail = (message, status = 501) => reply({ error: message }, status);
 
-export function createMailboxTransport(call, { secureTransport = false, signal, onGmailBegin } = {}) {
+export function createMailboxTransport(call, { secureTransport = false, signal, onGmailBegin, storage } = {}) {
   let disposed = false, deviceAttempt = null, connectingMicrosoft = false, observationRevision = Date.now();
   const accounts = new Map();
   const folderSets = new Map(), folderLoads = new Map(), messages = new Map(), messageKeys = new Map(), threads = new Map(), threadKeys = new Map(), pages = new Map();
   const writes = new Map();
+  const draftRevisions = new Map(), draftLocks = new Set(), sendReviews = new Map(), retainedFiles = new Map();
+  let retainedCompose;
   const roles = { inbox: ['INBOX', '\\Inbox'], drafts: ['Drafts', '\\Drafts'], sentitems: ['Sent', '\\Sent'], archive: ['Archive', '\\Archive'], deleteditems: ['Trash', '\\Trash'], junkemail: ['Junk', '\\Junk'] };
   const reject = code => { throw Object.assign(new Error(), { code }); };
   async function rpc(action, input) {
@@ -104,11 +108,11 @@ export function createMailboxTransport(call, { secureTransport = false, signal, 
     ref(accountId);
     const key = JSON.stringify([accountId, message.id]);
     let id = messageKeys.get(key);
-    if (!id) { id = crypto.randomUUID(); messageKeys.set(key, id); }
+    if (!id) { id = mailboxUUID(); messageKeys.set(key, id); }
     messages.set(id, { accountId, message });
     const threadKey = JSON.stringify([accountId, message.conversationId]);
     let threadId = threadKeys.get(threadKey);
-    if (!threadId) { threadId = crypto.randomUUID(); threadKeys.set(threadKey, threadId); threads.set(threadId, { accountId, conversationId: message.conversationId }); }
+    if (!threadId) { threadId = mailboxUUID(); threadKeys.set(threadKey, threadId); threads.set(threadId, { accountId, conversationId: message.conversationId }); }
     const account = accounts.get(accountId);
     const address = email => ({ email, address: email });
     return { id, uid: id, account_id: accountId, account_email: account.address, account_name: account.displayName,
@@ -174,7 +178,7 @@ export function createMailboxTransport(call, { secureTransport = false, signal, 
       try { data = { operation: await rpc('operation-outcome', { mailbox: ref(value.accountId), operationId: pending.input.operationId }) }; }
       finally { pending.busy = false; }
     } else {
-      pending = { busy: true, input: { mailbox: ref(value.accountId), messageId: value.message.id, expectedRevisionHash: value.message.revisionHash, operationId: crypto.randomUUID(), ...changes } };
+      pending = { busy: true, input: { mailbox: ref(value.accountId), messageId: value.message.id, expectedRevisionHash: value.message.revisionHash, operationId: mailboxUUID(), ...changes } };
       writes.set(key, pending);
       try { data = await rpc(action, pending.input); }
       catch (error) {
@@ -211,17 +215,215 @@ export function createMailboxTransport(call, { secureTransport = false, signal, 
     }
     return { done, failed };
   }
+  function journal(accountId) {
+    if (!storage?.getItem || !storage?.setItem) reject('local_journal_unavailable');
+    const a = accounts.get(accountId); ref(accountId);
+    const key = 'corevo-mail-operations-v1:' + JSON.stringify([a.binding.tenantId, a.binding.ownerUserId, accountId]);
+    let entries;
+    try { entries = JSON.parse(storage.getItem(key) || '[]'); } catch { reject('local_journal_unavailable'); }
+    if (!Array.isArray(entries) || entries.length > 200 || entries.some(e => !e || typeof e.key !== 'string' || e.key.length > 1200 || !/^[0-9a-f-]{36}$/i.test(e.operationId) || !['draft-create', 'draft-save', 'draft-attachment-add', 'draft-attachment-remove', 'send'].includes(e.action) || !['pending', 'provider_saved', 'provider_accepted', 'sent_observed', 'known_failed'].includes(e.state) || e.providerMessageId !== null && typeof e.providerMessageId !== 'string')) reject('local_journal_unavailable');
+    return { entries, save() {
+      try { const value = JSON.stringify(entries); storage.setItem(key, value); if (storage.getItem(key) !== value) reject('local_journal_unavailable'); }
+      catch { reject('local_journal_unavailable'); }
+    } };
+  }
+  async function draftWrite(accountId, key, action, input) {
+    const lock = JSON.stringify([accountId, key]); if (draftLocks.has(lock)) reject('operation_indeterminate');
+    draftLocks.add(lock);
+    try {
+      const store = journal(accountId); let entry = store.entries.find(e => e.key === key), operation;
+      const recovered = !!entry;
+      if (entry) {
+        if (entry.action !== action) reject('invalid_request');
+        if (entry.state === 'known_failed') reject('provider_rejected');
+        operation = entry.state === 'provider_saved' ? { operationId: entry.operationId, kind: entry.action, state: entry.state, providerMessageId: entry.providerMessageId, providerRevisionHash: entry.providerRevisionHash }
+          : await rpc('operation-outcome', { mailbox: ref(accountId), operationId: entry.operationId });
+      } else {
+        if (store.entries.length >= 200 || action === 'draft-create' && store.entries.some(e => e.action === action && e.state === 'pending')) reject('operation_indeterminate');
+        entry = { key, action, operationId: mailboxUUID(), state: 'pending', providerMessageId: null, providerRevisionHash: null };
+        store.entries.push(entry); store.save();
+        const data = await rpc(action, { mailbox: ref(accountId), operationId: entry.operationId, ...input }); operation = data.operation;
+      }
+      if (!operation || operation.operationId !== entry.operationId || operation.kind !== action) reject('operation_indeterminate');
+      if (operation.state === 'known_failed') { entry.state = 'known_failed'; store.save(); reject('provider_rejected'); }
+      if (operation.state !== 'provider_saved' || !operation.providerMessageId) reject('operation_indeterminate');
+      const current = await rpc('message', { mailbox: ref(accountId), messageId: operation.providerMessageId });
+      if (!current.isDraft || current.id !== operation.providerMessageId || current.revisionHash !== operation.providerRevisionHash) reject('revision_conflict');
+      entry.state = 'provider_saved'; entry.providerMessageId = current.id; entry.providerRevisionHash = current.revisionHash;
+      if (operation.attachmentId) entry.attachmentId = operation.attachmentId;
+      store.save();
+      const dto = messageDto(accountId, current); draftRevisions.set(dto.id, current.revisionHash);
+      return { current, dto, recovered };
+    } finally { draftLocks.delete(lock); }
+  }
+  async function saveNativeDraft(body) {
+    const accountId = body.accountId; ref(accountId);
+    if (body.aliasId || !/^[0-9a-f-]{36}$/i.test(body.corevoComposeId) || !body.corevoContent || !['compose', 'reply', 'replyAll', 'forward'].includes(body.corevoKind || 'compose')) reject('invalid_request');
+    const uploads = await prepareUploads(body.attachments || []);
+    if (body.forwardedMessages?.length) throw Object.assign(new Error('Hela mejl som EML-bilagor behöver sin leverantörskoppling. Texten finns kvar i skrivfönstret.'), { nativeMessage: true });
+    if (retainedCompose !== body.corevoComposeId) { retainedFiles.clear(); retainedCompose = body.corevoComposeId; }
+    const forwarded = body.forwardedAttachments || [];
+    if (!Array.isArray(forwarded) || forwarded.length + uploads.length > 10) reject('invalid_request');
+    for (const file of forwarded) {
+      const source = ownedMessage(file.messageId);
+      if (source.accountId !== accountId || typeof file.part !== 'string') reject('access_denied');
+      const key = JSON.stringify([accountId, file.messageId, file.part]);
+      if (!retainedFiles.has(key)) retainedFiles.set(key, await providerFile(accountId, source.message, file.part));
+      uploads.push(retainedFiles.get(key));
+    }
+    let value, existingId = body.existingUid;
+    // Recover an interrupted attachment change before issuing any new content change.
+    for (const entry of journal(accountId).entries.filter(e => e.state === 'pending' && (e.key.startsWith('add:' + body.corevoComposeId + ':') || e.key.startsWith('remove:' + body.corevoComposeId + ':')))) {
+      value = await draftWrite(accountId, entry.key, entry.action, {});
+      const store = journal(accountId), creation = store.entries.find(e => e.key === 'create:' + body.corevoComposeId);
+      if (creation) { creation.providerMessageId = value.current.id; creation.providerRevisionHash = value.current.revisionHash; store.save(); }
+    }
+    if (existingId != null) {
+      const owned = ownedMessage(existingId), folder = (await folders(accountId)).byId.get(owned.message.folderId)?.path;
+      if (owned.accountId !== accountId || body.existingAccountId !== accountId || body.existingFolder !== folder || !owned.message.isDraft || !draftRevisions.has(existingId)) reject('revision_conflict');
+    } else {
+      const kind = body.corevoKind || 'compose', input = { kind };
+      if (kind === 'compose') input.content = body.corevoContent;
+      else {
+        const source = ownedMessage(body.corevoSourceId);
+        if (source.accountId !== accountId) reject('access_denied');
+        input.source = { messageId: source.message.id, expectedRevisionHash: source.message.revisionHash };
+        if (kind === 'forward') input.to = body.corevoContent.to;
+      }
+      value = await draftWrite(accountId, 'create:' + body.corevoComposeId, 'draft-create', input);
+      existingId = value.dto.id;
+    }
+    // The first body read captures the revision the editor saw; background list refreshes cannot advance it.
+    const seen = draftRevisions.get(existingId), owned = ownedMessage(existingId);
+    if (!value || value.recovered || (body.corevoKind || 'compose') !== 'compose') {
+      const key = 'save:' + owned.message.id, store = journal(accountId), old = store.entries.find(e => e.key === key);
+      if (old?.state === 'provider_saved') { store.entries.splice(store.entries.indexOf(old), 1); store.save(); }
+      value = await draftWrite(accountId, key, 'draft-save', { draftId: owned.message.id, expectedRevisionHash: seen, content: body.corevoContent });
+      if (value.recovered) {
+        const resolved = journal(accountId), prior = resolved.entries.find(e => e.key === key);
+        resolved.entries.splice(resolved.entries.indexOf(prior), 1); resolved.save();
+        value = await draftWrite(accountId, key, 'draft-save', { draftId: value.current.id, expectedRevisionHash: value.current.revisionHash, content: body.corevoContent });
+      }
+    }
+    let files = await draftFiles(accountId, value.current);
+    const remaining = [...uploads], remove = [];
+    for (const file of files) {
+      const index = remaining.findIndex(wanted => wanted.digest === file.digest);
+      if (index < 0) remove.push(file); else remaining.splice(index, 1);
+    }
+    // IMAP part numbers may shift after MIME replacement; remove from the end and reread.
+    for (const file of remove.reverse()) {
+      files = await draftFiles(accountId, value.current);
+      const current = [...files].reverse().find(f => f.digest === file.digest);
+      if (!current) reject('revision_conflict');
+      value = await draftWrite(accountId, 'remove:' + body.corevoComposeId + ':' + value.current.revisionHash + ':' + current.id, 'draft-attachment-remove', { draftId: value.current.id, expectedRevisionHash: value.current.revisionHash, attachmentId: current.id });
+    }
+    for (const upload of remaining) value = await draftWrite(accountId, 'add:' + body.corevoComposeId + ':' + upload.digest + ':' + value.current.revisionHash, 'draft-attachment-add', { draftId: value.current.id, expectedRevisionHash: value.current.revisionHash, file: upload.file });
+    const actual = (await draftFiles(accountId, value.current)).map(f => f.digest).sort();
+    if (JSON.stringify(actual) !== JSON.stringify(uploads.map(f => f.digest).sort())) reject('revision_conflict');
+    const saved = journal(accountId), creation = saved.entries.find(e => e.key === 'create:' + body.corevoComposeId);
+    if (creation) { creation.providerMessageId = value.current.id; creation.providerRevisionHash = value.current.revisionHash; saved.save(); }
+    pages.clear(); folderSets.delete(accountId); await folders(accountId, true);
+    value.dto = messageDto(accountId, value.current);
+    return { uid: value.dto.uid, folder: value.dto.folder, accountId, messageId: value.dto.message_id, storage: 'provider' };
+  }
+  async function prepareUploads(files) {
+    if (!Array.isArray(files) || files.length > 10) reject('invalid_request');
+    const result = []; let total = 0;
+    for (const file of files) {
+      if (!file || typeof file.filename !== 'string' || !file.filename || file.filename.length > 512 || /[\x00-\x1f\x7f/\\]/.test(file.filename) || typeof file.contentType !== 'string' || !/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(file.contentType) || typeof file.content !== 'string' || file.content.length > 2666668) reject('invalid_request');
+      let bytes; try { const raw = atob(file.content); if (btoa(raw) !== file.content) reject('invalid_request'); bytes = Uint8Array.from(raw, c => c.charCodeAt(0)); } catch { reject('invalid_request'); }
+      total += bytes.length;
+      if (!bytes.length || bytes.length > 2000000 || total > 4000000) throw Object.assign(new Error('Bilagor får vara högst 2 MB per fil och 4 MB tillsammans i den här kopplingen. Dina filer finns kvar i skrivfönstret.'), { nativeMessage: true });
+      if (!globalThis.crypto?.subtle) throw Object.assign(new Error('Öppna Corevo via HTTPS för att spara bilagor säkert.'), { nativeMessage: true });
+      const digest = await fileDigest(file.filename, file.content);
+      result.push({ digest, file: { name: file.filename, contentType: file.contentType, bytesBase64: file.content } });
+    }
+    return result;
+  }
+  async function fileDigest(name, bytesBase64) {
+    if (!globalThis.crypto?.subtle) throw Object.assign(new Error('Öppna Corevo via HTTPS för att hantera bilagor säkert.'), { nativeMessage: true });
+    const bytes = new TextEncoder().encode(JSON.stringify([name, bytesBase64]));
+    return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('');
+  }
+  async function providerFile(accountId, message, attachmentId) {
+    const file = await rpc('attachment', { mailbox: ref(accountId), messageId: message.id, attachmentId, expectedRevisionHash: message.revisionHash });
+    return { id: attachmentId, digest: await fileDigest(file.name, file.bytesBase64), file: { name: file.name, contentType: 'application/octet-stream', bytesBase64: file.bytesBase64 } };
+  }
+  async function draftFiles(accountId, message) {
+    const result = [];
+    for (const file of message.attachments || []) result.push(await providerFile(accountId, message, file.id));
+    return result;
+  }
+  const reviewContent = body => JSON.stringify([body.accountId, body.corevoComposeId, body.corevoKind || 'compose', body.corevoSourceId || null, body.corevoContent, body.attachments || [], body.forwardedAttachments || [], body.forwardedMessages || [], body.priority || 'normal']);
+  async function reviewSend(body) {
+    if (body.priority && body.priority !== 'normal') throw Object.assign(new Error('Prioritetsmarkeringen behöver stöd i leverantörskopplingen innan utskick.'), { nativeMessage: true });
+    const saved = await saveNativeDraft({ ...body, ...(body.draft ? { existingUid: body.draft.uid, existingFolder: body.draft.folder, existingAccountId: body.draft.accountId } : {}) });
+    const current = await detail(saved.uid);
+    if (!current.isDraft || !current.contentDigest || !(current.to?.length + current.cc?.length + current.bcc?.length)) reject('revision_conflict');
+    if (sendReviews.size >= 100) sendReviews.delete(sendReviews.keys().next().value);
+    const reviewId = mailboxUUID();
+    sendReviews.set(reviewId, { accountId: body.accountId, uid: saved.uid, providerId: current.id, revisionHash: current.revisionHash, contentDigest: current.contentDigest, content: reviewContent(body), expiresAt: Date.now() + 600000 });
+    return { reviewId, draft: { uid: saved.uid, folder: saved.folder, accountId: body.accountId }, from: accounts.get(body.accountId).address, to: current.to, cc: current.cc, bcc: current.bcc, subject: current.subject, text: current.body?.content || '', attachments: current.attachments.map(a => ({ name: a.name, size: a.size })), delivery: 'not_sent' };
+  }
+  async function sendReviewed(body) {
+    const review = sendReviews.get(body.corevoReviewId);
+    if (!review || review.expiresAt < Date.now() || review.content !== reviewContent(body)) reject('revision_conflict');
+    ref(review.accountId);
+    const key = 'send:' + review.providerId + ':' + review.contentDigest, lock = JSON.stringify([review.accountId, key]);
+    if (draftLocks.has(lock)) reject('operation_indeterminate');
+    draftLocks.add(lock);
+    try {
+      const store = journal(review.accountId); let entry = store.entries.find(e => e.key === key), operation;
+      if (entry) operation = await rpc('operation-outcome', { mailbox: ref(review.accountId), operationId: entry.operationId });
+      else {
+        if (store.entries.length >= 200) reject('operation_indeterminate');
+        entry = { key, action: 'send', operationId: mailboxUUID(), state: 'pending', providerMessageId: review.providerId, providerRevisionHash: review.revisionHash };
+        store.entries.push(entry); store.save();
+        const response = await rpc('send', { mailbox: ref(review.accountId), operationId: entry.operationId, draftId: review.providerId, expectedRevisionHash: review.revisionHash, expectedContentDigest: review.contentDigest }); operation = response.operation;
+      }
+      if (!operation || operation.kind !== 'send' || operation.operationId !== entry.operationId) reject('operation_indeterminate');
+      if (operation.state === 'known_failed') { entry.state = operation.state; store.save(); reject('provider_rejected'); }
+      if (!['provider_accepted', 'sent_observed'].includes(operation.state)) reject('operation_indeterminate');
+      entry.state = operation.state; entry.providerMessageId = operation.providerMessageId; store.save();
+      pages.clear(); folderSets.delete(review.accountId);
+      const set = await folders(review.accountId, true);
+      return { ok: true, providerAccepted: true, sentObserved: operation.state === 'sent_observed', delivery: 'unknown', sentFolder: set.byId.get(set.wellKnown.sentitems)?.path || 'Sent' };
+    } finally { draftLocks.delete(lock); }
+  }
   async function request(path, method = 'GET', rawBody = null) {
     if (disposed) return fail('Mejlytan är stängd.', 410);
     if (typeof path !== 'string' || path.length > 4096 || !/^\/(api|oauth)\//.test(path)
       || !['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
-      || rawBody !== null && (typeof rawBody !== 'string' || rawBody.length > 131072)) return fail(errors.invalid_request, 400);
+      || rawBody !== null && (typeof rawBody !== 'string' || rawBody.length > (/^\/api\/mail\/(draft|review|send)$/.test(path) ? 5800000 : 131072))) return fail(errors.invalid_request, 400);
     try {
       const url = new URL(path, 'https://corevo.invalid');
       const body = rawBody === null ? {} : JSON.parse(rawBody);
       if (!body || typeof body !== 'object' || Array.isArray(body)) return fail(errors.invalid_request, 400);
       const route = url.pathname;
+      if (route === '/api/mail/draft' && method === 'POST') return reply(await saveNativeDraft(body));
+      if (route === '/api/mail/review' && method === 'POST') return reply(await reviewSend(body));
+      if (route === '/api/mail/send' && method === 'POST') return reply(await sendReviewed(body));
       if (route === '/api/accounts' && method === 'GET') return reply(await inventory());
+      if (route === '/api/mail/corevo-sync' && method === 'POST') {
+        if (Object.keys(body).some(key => !['accountId', 'folder'].includes(key)) || body.accountId !== null && typeof body.accountId !== 'string' || typeof body.folder !== 'string' || body.folder.length > 1024) reject('invalid_request');
+        const items = [], byAccount = {}, snapshots = {}, accountIds = selectedAccounts(body.accountId);
+        for (const id of accountIds) {
+          try {
+            const set = await folders(id, true), folderId = set.byPath.get(body.folder);
+            if (folderId) {
+              const status = await rpc('sync-status', { mailbox: ref(id), folderId });
+              const result = await rpc('sync-step', { mailbox: ref(id), folderId, expectedCheckpointRevision: status.checkpointRevision });
+              items.push({ accountId: id, state: result.state, folders: set.items, error: result.lastError ? errors[result.lastError] || 'Synkningen kunde inte slutföras.' : null });
+            }
+            const inbox = set.byId.get(set.wellKnown.inbox);
+            byAccount[id] = inbox?.counts_known ? inbox.unread_count : null;
+            snapshots[id] = { known: inbox?.counts_known === true, stale: false, observedAt: inbox?.server_counts_at, revision: inbox?.server_count_revision };
+          } catch (error) { items.push({ accountId: id, state: 'unavailable', error: errors[error.code] || 'Synkningen kunde inte slutföras.' }); }
+        }
+        const complete = Object.keys(byAccount).length === accountIds.length && Object.values(byAccount).every(Number.isSafeInteger);
+        return reply({ items, counts: { byAccount, snapshots, complete, total: complete ? Object.values(byAccount).reduce((sum, count) => sum + count, 0) : null } });
+      }
       if (route === '/api/mail/messages/bulk-read' && method === 'POST') {
         if (typeof body.read !== 'boolean') reject('invalid_request');
         const changed = await changeMessages(body.ids, 'set-read', { isRead: body.read });
@@ -277,8 +479,9 @@ export function createMailboxTransport(call, { secureTransport = false, signal, 
         if (!messageRoute[2]) return reply(messageDto(value.accountId, data));
         if (messageRoute[2] === 'bcc') return reply({ bcc: (data.bcc || []).map(email => ({ email })) });
         if (messageRoute[2] === 'body') {
+          if (data.isDraft) draftRevisions.set(id, data.revisionHash);
           const text = data.body?.content || '', escaped = text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-          return reply({ text, html: '<div style="white-space:pre-wrap">' + escaped + '</div>', attachments: (data.attachments || []).map(a => ({ part: a.id, filename: a.name, size: a.size, content_type: a.type, contentType: a.type })), hasBlockedRemoteImages: false });
+          return reply({ text, html: data.body?.html ?? '<div style="white-space:pre-wrap">' + escaped + '</div>', attachments_complete: Array.isArray(data.attachments), attachments: (data.attachments || []).map(a => ({ part: a.id, filename: a.name, size: a.size, content_type: 'application/octet-stream', contentType: 'application/octet-stream' })), hasBlockedRemoteImages: false });
         }
         const attachmentId = decodeURIComponent(messageRoute[2].slice('attachments/'.length));
         const attachment = data.attachments?.find(a => a.id === attachmentId);
@@ -286,7 +489,7 @@ export function createMailboxTransport(call, { secureTransport = false, signal, 
         const file = await rpc('attachment', { mailbox: ref(value.accountId), messageId: data.id, attachmentId, expectedRevisionHash: data.revisionHash });
         const bytes = Array.from(atob(file.bytesBase64), c => c.charCodeAt(0));
         if (bytes.length !== file.byteLength || bytes.length > 8000000) reject('invalid_request');
-        return { status: 200, bytes, contentType: attachment.type || 'application/octet-stream' };
+        return { status: 200, bytes, contentType: 'application/octet-stream' };
       }
       if (route === '/api/integrations/status' && method === 'GET') {
         const { items } = await rpc('providers', {});
@@ -342,7 +545,7 @@ export function createMailboxTransport(call, { secureTransport = false, signal, 
       }
       return fail('Den här funktionen är ännu inte kopplad till Corevos backend. Ingen åtgärd utfördes.');
     } catch (error) {
-      return fail(errors[error.code] || 'Mejlkopplingen kunde inte verifieras. Försök igen efter att anslutningen har kontrollerats.',
+      return fail(error.nativeMessage ? error.message : errors[error.code] || 'Mejlkopplingen kunde inte verifieras. Försök igen efter att anslutningen har kontrollerats.',
         error.code === 'access_denied' || error.code === 'account_changed' ? 403 : 409);
     }
   }
@@ -353,6 +556,6 @@ export function createMailboxTransport(call, { secureTransport = false, signal, 
       try { await rpc('oauth-complete', { provider: 'gmail', attemptId: saved.attemptId, callback }); return reply(await inventory()); }
       catch (error) { return fail(errors[error.code] || 'Google-anslutningen kunde inte verifieras.', 409); }
     },
-    dispose() { disposed = true; deviceAttempt = null; for (const map of [accounts, folderSets, folderLoads, messages, messageKeys, threads, threadKeys, pages, writes]) map.clear(); },
+    dispose() { disposed = true; deviceAttempt = null; for (const map of [accounts, folderSets, folderLoads, messages, messageKeys, threads, threadKeys, pages, writes, draftRevisions, draftLocks, sendReviews, retainedFiles]) map.clear(); },
   };
 }

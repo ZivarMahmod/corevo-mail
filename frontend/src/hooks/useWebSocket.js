@@ -7,6 +7,7 @@ import { playNotificationSound } from '../utils/notificationSounds.js';
 import { accountAffectsUnifiedInbox } from '../utils/unifiedInbox.js';
 import { dispatchPluginWsMessage, dispatchPluginReconnect } from '../plugins/events.js';
 import { recordDiagEvent } from '../utils/diagEvents.js';
+import { startCorevoSync } from '../utils/corevo-sync.js';
 
 function _applyServerCounts(counts) {
   useStore.getState().setUnreadCounts(counts);
@@ -363,6 +364,24 @@ export function useWebSocket() {
 
   useEffect(() => {
     mountedRef.current = true;
+    if (window.corevoMailHosted) {
+      return startCorevoSync({
+        run: () => {
+          const { accounts, selectedAccountId, selectedFolder } = useStore.getState();
+          if (!accounts.some(account => account.enabled)) return null;
+          return api.corevoSync({ accountId: selectedAccountId || null, folder: selectedFolder || 'INBOX' });
+        },
+        apply: data => {
+          if (data.counts) _applyServerCounts(data.counts);
+          for (const item of data.items || []) {
+            if (item.folders) setFolders(item.accountId, item.folders);
+            updateAccount(item.accountId, { sync_error: item.error || null });
+          }
+          window.dispatchEvent(new CustomEvent('mailflow:refresh'));
+          window.dispatchEvent(new CustomEvent('mailflow:sync_done'));
+        },
+      });
+    }
     connect();
     return () => {
       mountedRef.current = false;

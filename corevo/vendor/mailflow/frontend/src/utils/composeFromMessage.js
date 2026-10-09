@@ -82,6 +82,7 @@ export async function openReplyFromMessage(message, { accounts, openCompose, get
     quotedBody: quotedText,
     quotedBodyHtml,
     inReplyTo: message.message_id,
+    ...(typeof window !== 'undefined' && window.corevoMailHosted ? { corevoSourceId: message.id } : {}),
     references: referencesChain,
     accountId: message.account_id,
     aliasId: replyAliasId,
@@ -116,6 +117,7 @@ export async function openForwardFromMessage(message, { openCompose, getMessageB
     quotedBodyHtml: fwdHtml,
     accountId: message.account_id,
     isForward: true,
+    ...(typeof window !== 'undefined' && window.corevoMailHosted ? { corevoSourceId: message.id } : {}),
     forwardedAttachments: (fwdBody?.attachments || []).map(att => ({
       messageId: message.id,
       part: att.part,

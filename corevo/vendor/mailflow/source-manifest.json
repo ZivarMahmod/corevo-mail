@@ -31,7 +31,7 @@
     {
       "path": "frontend/src/App.jsx",
       "upstreamSha256": "fbe0ec0e1d3861fff8d52748d639e572a0f1503e1ee514511c75052bb21ce84b",
-      "currentSha256": "fbe0ec0e1d3861fff8d52748d639e572a0f1503e1ee514511c75052bb21ce84b",
+      "currentSha256": "5e88e29bad7c8ef54a5bdd9d7baa497e68d83df45c3499b7be4094c4fbaf1a7d",
       "modified": false
     },
     {
@@ -121,8 +121,8 @@
     {
       "path": "frontend/src/components/ComposeModal.jsx",
       "upstreamSha256": "3cb65c1b2d414338b6e870dbe9a4a162bf30eb61ca0f707000f190ad4e8a8f19",
-      "currentSha256": "3cb65c1b2d414338b6e870dbe9a4a162bf30eb61ca0f707000f190ad4e8a8f19",
-      "modified": false
+      "currentSha256": "76b3ccb2a889b99df5ca1f0edf7df07e00470bf77049407bb5c3a396d34c1177",
+      "modified": true
     },
     {
       "path": "frontend/src/components/ComposeModal.render.test.js",
@@ -295,8 +295,8 @@
     {
       "path": "frontend/src/components/MessageBodyView.jsx",
       "upstreamSha256": "5765d98782c7b7f38ab691ee1db82a1ba3f1235e4a80cb66ca2d874f125dc044",
-      "currentSha256": "5765d98782c7b7f38ab691ee1db82a1ba3f1235e4a80cb66ca2d874f125dc044",
-      "modified": false
+      "currentSha256": "62ce58d744b45b7219a22f27ef95adb47c80e73a6101591bff8906f5341fe875",
+      "modified": true
     },
     {
       "path": "frontend/src/components/MessageHeaderModal.jsx",
@@ -511,7 +511,7 @@
     {
       "path": "frontend/src/hooks/useWebSocket.js",
       "upstreamSha256": "810b22f1f8741575ca9575821e40a1d24c86993b3f50970f89e27b0ea5b45396",
-      "currentSha256": "b68c4b626085784ce0cc124ac22dd13bf0e66696a4901235d0ab236e9ed28425",
+      "currentSha256": "073cdaaea67d29d4cfc17bcfd26e83541f8d29682526ad82f6dcf279c08ac86a",
       "modified": true
     },
     {
@@ -799,7 +799,7 @@
     {
       "path": "frontend/src/utils/api.js",
       "upstreamSha256": "5ec29cdc0353b01e5cc0c7faf0976cf57680bd78dfd287d5e3593671a4db9196",
-      "currentSha256": "a67c360f94c195400eed0d2b302984932b34983e0a602cb8b252887eca183a86",
+      "currentSha256": "7e25975dd0728b5ec2d9b6a71e948cedab53ef6158def3947c5219c22edbb277",
       "modified": true
     },
     {
@@ -883,8 +883,8 @@
     {
       "path": "frontend/src/utils/composeFromMessage.js",
       "upstreamSha256": "3c49cb6612d141f4cb10b6c8fe9f6a8012c544c42b107f5bbe0d9208f445e72e",
-      "currentSha256": "3c49cb6612d141f4cb10b6c8fe9f6a8012c544c42b107f5bbe0d9208f445e72e",
-      "modified": false
+      "currentSha256": "5d0988b7e00eb066bbb2b6f2d8a5847a75fca7e7ddd2c66ae44ee374fbbcb1e6",
+      "modified": true
     },
     {
       "path": "frontend/src/utils/composeFromMessage.test.js",
@@ -1309,14 +1309,14 @@
     {
       "path": "frontend/src/utils/openSavedDraft.js",
       "upstreamSha256": "a349bc4ec69f96101574707e9ee272c97ab06ca88ac617de1f9cc0ba8e16fce4",
-      "currentSha256": "a349bc4ec69f96101574707e9ee272c97ab06ca88ac617de1f9cc0ba8e16fce4",
-      "modified": false
+      "currentSha256": "35c29acb65f95b22d308b74b4c686ef83abbc0495c9114d918d6e8c9853ef1c2",
+      "modified": true
     },
     {
       "path": "frontend/src/utils/openSavedDraft.test.js",
       "upstreamSha256": "47bf1dd98b9f31ca466e05e57fece32cd6cdce0e2a4ba2c4d0f951057c1fe63a",
-      "currentSha256": "47bf1dd98b9f31ca466e05e57fece32cd6cdce0e2a4ba2c4d0f951057c1fe63a",
-      "modified": false
+      "currentSha256": "79ef36a17c64441059ae9adef6249896e522806f2e0d13b5c0d32461b48b5d0b",
+      "modified": true
     },
     {
       "path": "frontend/src/utils/openSentMessage.js",

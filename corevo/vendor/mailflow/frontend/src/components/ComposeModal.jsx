@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next';
 import DOMPurify from 'dompurify';
 import { useStore } from '../store/index.js';
 import { api } from '../utils/api.js';
+import { mailboxUUID } from '../../../../../src/modules/mail/mailbox-uuid.mjs';
+import SendReview from '../../../../../src/modules/mail/SendReview.jsx';
 import { useMobile } from '../hooks/useMobile.js';
 import { useUiScale, descale } from '../hooks/useUiScale.js';
 import { useEditor, EditorContent, useEditorState, NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
@@ -197,6 +199,8 @@ export default function ComposeModal() {
   const { closeCompose, composeData, accounts, addNotification, plaintextEmail, setThreadMessages, setPrepareComposeSwitch, updateComposePersistedKey } = useStore();
   const composeSession = useRef(useStore.getState().composeSession).current;
   const composeOwner = useRef(useStore.getState().user?.id).current;
+  const corevoComposeId = useRef(composeData?.corevoComposeId || mailboxUUID()).current;
+  const [corevoReview, setCorevoReview] = useState(null);
   const isMobile = useMobile();
   const uiScale = useUiScale();
 
@@ -802,7 +806,7 @@ export default function ComposeModal() {
     setAiPanel(null);
   };
 
-  const handleSend = async ({ skipSubjectWarn = false, skipAttachWarn = false } = {}) => {
+  const handleSend = async ({ skipSubjectWarn = false, skipAttachWarn = false, reviewId = null } = {}) => {
     if (useStore.getState().user?.id !== composeOwner) return;
     if (sending || sendingRef.current || sendWaitingRef.current) return;
     if (composeSwitchRef.current?.isSaving()) {
@@ -811,7 +815,7 @@ export default function ComposeModal() {
       finally { sendWaitingRef.current = false; }
       const active = useStore.getState();
       if (!active.composing || active.composeSession !== composeSession) return;
-      return sendRef.current({ skipSubjectWarn, skipAttachWarn });
+      return sendRef.current({ skipSubjectWarn, skipAttachWarn, reviewId });
     }
     if (unsupportedSenderRef.current) { setError(t('compose.unsupportedDraftFrom', { defaultValue: 'Choose a configured sender before saving or sending this draft.' })); return false; }
     if (composeData?.unresolvedExternalAttachments) {
@@ -858,8 +862,9 @@ export default function ComposeModal() {
     const savedDraft = draftPointerRef.current;
     const hasDraft = savedDraft.uid != null && savedDraft.folder != null && savedDraft.accountId;
     try {
-      const sendResult = await api.post('/mail/send', {
+      const sendPayload = {
         accountId,
+        ...(window.corevoMailHosted ? { corevoComposeId, corevoKind: isForward ? 'forward' : composeData?.isReplyAll ? 'replyAll' : isReply ? 'reply' : 'compose', corevoSourceId: composeData?.corevoSourceId || composeData?.inReplyTo } : {}),
         ...(aliasId ? { aliasId } : {}),
         to: toFinal,
         cc: ccFinal,
@@ -895,7 +900,14 @@ export default function ComposeModal() {
         // draft only once the message is delivered.
         undoSeconds: UNDO_SEND_SECONDS,
         ...(hasDraft ? { draft: { uid: savedDraft.uid, folder: savedDraft.folder, accountId: savedDraft.accountId } } : {}),
-      }, { 'X-Idempotency-Key': idempotencyKeyRef.current });
+      };
+      if (window.corevoMailHosted && !reviewId) {
+        const review = await api.post('/mail/review', sendPayload);
+        draftPointerRef.current = { ...draftPointerRef.current, ...review.draft };
+        setCorevoReview(review);
+        return;
+      }
+      const sendResult = await api.post('/mail/send', { ...sendPayload, ...(reviewId ? { corevoReviewId: reviewId } : {}) }, { 'X-Idempotency-Key': idempotencyKeyRef.current });
       // Send confirmed — clear the key so a subsequent send from a reused modal gets a fresh one.
       idempotencyKeyRef.current = null;
       const replyThreadId = isReply ? composeData?.threadId : null;
@@ -912,11 +924,11 @@ export default function ComposeModal() {
         // account's Sent folder — tell the user so they know their record is incomplete.
         const sentCopyFailed = result?.sentCopySaved === false;
         addNotification({
-          title: sentCopyFailed ? t('compose.sent.noCopy') : t('compose.sent.title'),
+          title: result?.providerAccepted && !result?.sentObserved ? 'Leverantören har tagit emot mejlet' : sentCopyFailed ? t('compose.sent.noCopy') : t('compose.sent.title'),
           body: subject || t('common.noSubject'),
           // When the Sent copy wasn't saved, omit the "View" action — it would navigate to a
           // Sent folder that doesn't contain the message.
-          ...(sentCopyFailed ? {} : {
+          ...(sentCopyFailed || result?.providerAccepted && !result?.sentObserved ? {} : {
             onAction: () => openSentMessage(useStore, { accountId, folder: sentFolder, messageId: result?.messageId }),
             actionLabel: t('compose.sent.action'),
           }),
@@ -1054,10 +1066,10 @@ export default function ComposeModal() {
     attachments: attachments.map(a => a.name),
     forwardedAttachments: fwdAttachments.map(a => `${a.messageId}:${a.part}`),
   });
-  unsupportedRef.current = () => sendingRef.current || attachments.length > 0 || fwdAttachments.length > 0
+  unsupportedRef.current = () => sendingRef.current || Boolean(corevoReview) || (!window.corevoMailHosted && (attachments.length > 0 || fwdAttachments.length > 0))
     || Boolean(composeData?.unresolvedExternalAttachments);
-  switchBlockRef.current = () => attachments.length > 0
-    || (fwdAttachments.length > 0 && !composeData?.externalAttachments?.length);
+  switchBlockRef.current = () => Boolean(corevoReview) || (!window.corevoMailHosted && attachments.length > 0)
+    || (!window.corevoMailHosted && fwdAttachments.length > 0 && !composeData?.externalAttachments?.length);
   saveRef.current = async value => {
     if (useStore.getState().user?.id !== composeOwner) return false;
     const { accountId, aliasId } = resolveFrom(value.fromValue || fromValue);
@@ -1069,10 +1081,13 @@ export default function ComposeModal() {
       const pointer = draftPointerRef.current;
       const result = await api.saveDraft({
         accountId,
+        ...(window.corevoMailHosted ? { corevoComposeId, corevoKind: isForward ? 'forward' : composeData?.isReplyAll ? 'replyAll' : isReply ? 'reply' : 'compose', corevoSourceId: composeData?.corevoSourceId || composeData?.inReplyTo } : {}),
         includeIdentity: true,
         ...(aliasId ? { aliasId } : {}),
         to: value.to, cc: value.cc, bcc: value.bcc, subject: value.subject,
         body: value.body, bodyIsHtml: value.bodyIsHtml,
+        ...(window.corevoMailHosted && attachments.length ? { attachments: attachments.map(a => ({ filename: a.name, content: a.data, contentType: a.type || 'application/octet-stream' })) } : {}),
+        ...(window.corevoMailHosted && fwdAttachments.length ? { forwardedAttachments: fwdAttachments } : {}),
         ...(composeData?.inReplyTo ? { inReplyTo: composeData.inReplyTo } : {}),
         ...(composeData?.references ? { references: composeData.references } : {}),
         ...(value.quotedBody ? { quotedBody: value.quotedBody } : {}),
@@ -1187,7 +1202,7 @@ export default function ComposeModal() {
   // leave a stale snapshot behind for the timer to act on.
   useEffect(() => {
     autosaveRef.current = { isDirty, doSaveDraft, sending, savingDraft, fromValue, resolveFrom,
-      dialogOpen: showCloseDialog || showDiscardSheet || showAttachWarnForDraft };
+      dialogOpen: showCloseDialog || showDiscardSheet || showAttachWarnForDraft || Boolean(corevoReview) };
   });
 
   // Every edit outside the rich-text editor (subject, recipients, attachments, the plaintext
@@ -1865,6 +1880,7 @@ export default function ComposeModal() {
       )}
 
       {/* Empty subject warning sheet */}
+      {corevoReview && <SendReview review={corevoReview} busy={sending} error={error} onCancel={() => setCorevoReview(null)} onSend={() => handleSend({ skipSubjectWarn: true, skipAttachWarn: true, reviewId: corevoReview.reviewId })} />}
       {showEmptySubjectWarn && (
         <>
           <div
@@ -2474,6 +2490,7 @@ export default function ComposeModal() {
     </div>
 
     {/* Empty subject warning dialog */}
+    {corevoReview && <SendReview review={corevoReview} busy={sending} error={error} onCancel={() => setCorevoReview(null)} onSend={() => handleSend({ skipSubjectWarn: true, skipAttachWarn: true, reviewId: corevoReview.reviewId })} />}
     {showEmptySubjectWarn && (
       <>
         <div
