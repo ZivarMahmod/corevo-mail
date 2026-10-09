@@ -1,3 +1,7 @@
+# Corevo Mail
+
+This is Corevo's official AGPL fork. The incorporated, independently buildable Corevo Mail module and its current verification status are documented in [COREVO.md](COREVO.md). Build it from `corevo/`; a separate MailFlow installation is not required. Original MailFlow documentation follows below for attribution and reference.
+
 <p align="center">
   <img src="media/mailflow-logo.png" width="200" alt="MailFlow Logo">
 </p>

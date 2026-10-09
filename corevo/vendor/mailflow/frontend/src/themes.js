@@ -1,0 +1,977 @@
+export const THEMES = {
+  system: {
+    label: 'System',
+    description: 'Match OS light/dark setting',
+    preview: ['#0f0f11', '#f0f0f5', '#7c6af7', '#6366f1'],
+    vars: {
+      '--bg-primary': '#0f0f11',
+      '--bg-secondary': '#161619',
+      '--bg-tertiary': '#1e1e23',
+      '--bg-elevated': '#242429',
+      '--bg-hover': '#2a2a30',
+      '--border': '#2e2e35',
+      '--border-subtle': '#232328',
+      '--text-primary': '#e8e8ed',
+      '--text-secondary': '#9898a8',
+      '--text-tertiary': '#5a5a6a',
+      '--accent': '#7c6af7',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#3d3569',
+      '--accent-glow': 'rgba(124,106,247,0.15)',
+      '--green': '#4ade80',
+      '--red': '#f87171',
+      '--amber': '#fbbf24',
+    }
+  },
+
+  dark: {
+    label: 'Dark',
+    description: 'Default dark theme',
+    preview: ['#0f0f11', '#161619', '#7c6af7', '#e8e8ed'],
+    vars: {
+      '--bg-primary': '#0f0f11',
+      '--bg-secondary': '#161619',
+      '--bg-tertiary': '#1e1e23',
+      '--bg-elevated': '#242429',
+      '--bg-hover': '#2a2a30',
+      '--border': '#2e2e35',
+      '--border-subtle': '#232328',
+      '--text-primary': '#e8e8ed',
+      '--text-secondary': '#9898a8',
+      '--text-tertiary': '#5a5a6a',
+      '--accent': '#7c6af7',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#3d3569',
+      '--accent-glow': 'rgba(124,106,247,0.15)',
+      '--green': '#4ade80',
+      '--red': '#f87171',
+      '--amber': '#fbbf24',
+    }
+  },
+
+  light: {
+    label: 'Light',
+    description: 'Clean light theme',
+    preview: ['#f8f8fc', '#ffffff', '#6366f1', '#1a1a2e'],
+    vars: {
+      '--bg-primary': '#f0f0f5',
+      '--bg-secondary': '#ffffff',
+      '--bg-tertiary': '#f5f5fa',
+      '--bg-elevated': '#ffffff',
+      '--bg-hover': '#ebebf5',
+      '--border': '#d8d8e8',
+      '--border-subtle': '#e8e8f0',
+      '--text-primary': '#1a1a2e',
+      '--text-secondary': '#4a4a6a',
+      '--text-tertiary': '#8888aa',
+      '--accent': '#6366f1',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#e0e0ff',
+      '--accent-glow': 'rgba(99,102,241,0.12)',
+      '--green': '#16a34a',
+      '--red': '#dc2626',
+      '--amber': '#d97706',
+    }
+  },
+
+  gtd: {
+    label: 'GTD',
+    description: 'Getting Things Done — dark, per-state accents',
+    preview: ['#0f0f11', '#161619', '#4A9EDD', '#e8e8ed'],
+    vars: {
+      '--bg-primary': '#0f0f11',
+      '--bg-secondary': '#161619',
+      '--bg-tertiary': '#1e1e23',
+      '--bg-elevated': '#242429',
+      '--bg-hover': '#2a2a30',
+      '--border': '#2e2e35',
+      '--border-subtle': '#232328',
+      '--text-primary': '#e8e8ed',
+      '--text-secondary': '#9898a8',
+      '--text-tertiary': '#5a5a6a',
+      '--accent': '#4A9EDD',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#10293f',
+      '--accent-glow': 'rgba(74,158,221,0.15)',
+      '--green': '#2FBD85',
+      '--red': '#E56A6A',
+      '--amber': '#D9B430',
+    }
+  },
+
+  gruvbox: {
+    label: 'Gruvbox',
+    description: 'Retro groove',
+    preview: ['#282828', '#3c3836', '#d79921', '#ebdbb2'],
+    vars: {
+      '--bg-primary': '#1d2021',
+      '--bg-secondary': '#282828',
+      '--bg-tertiary': '#32302f',
+      '--bg-elevated': '#3c3836',
+      '--bg-hover': '#504945',
+      '--border': '#504945',
+      '--border-subtle': '#3c3836',
+      '--text-primary': '#ebdbb2',
+      '--text-secondary': '#d5c4a1',
+      '--text-tertiary': '#928374',
+      '--accent': '#d79921',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#3c3401',
+      '--accent-glow': 'rgba(215,153,33,0.15)',
+      '--green': '#b8bb26',
+      '--red': '#fb4934',
+      '--amber': '#fe8019',
+    }
+  },
+
+  catppuccin_mocha: {
+    label: 'Catppuccin Mocha',
+    description: 'Soothing pastel dark',
+    preview: ['#1e1e2e', '#181825', '#cba6f7', '#cdd6f4'],
+    vars: {
+      '--bg-primary': '#1e1e2e',
+      '--bg-secondary': '#181825',
+      '--bg-tertiary': '#313244',
+      '--bg-elevated': '#45475a',
+      '--bg-hover': '#585b70',
+      '--border': '#45475a',
+      '--border-subtle': '#313244',
+      '--text-primary': '#cdd6f4',
+      '--text-secondary': '#bac2de',
+      '--text-tertiary': '#6c7086',
+      '--accent': '#cba6f7',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#2a1f3d',
+      '--accent-glow': 'rgba(203,166,247,0.15)',
+      '--green': '#a6e3a1',
+      '--red': '#f38ba8',
+      '--amber': '#fab387',
+    }
+  },
+
+  catppuccin_latte: {
+    label: 'Catppuccin Latte',
+    description: 'Soothing pastel light',
+    preview: ['#eff1f5', '#e6e9ef', '#8839ef', '#4c4f69'],
+    vars: {
+      '--bg-primary': '#eff1f5',
+      '--bg-secondary': '#e6e9ef',
+      '--bg-tertiary': '#dce0e8',
+      '--bg-elevated': '#ffffff',
+      '--bg-hover': '#ccd0da',
+      '--border': '#ccd0da',
+      '--border-subtle': '#dce0e8',
+      '--text-primary': '#4c4f69',
+      '--text-secondary': '#5c5f77',
+      '--text-tertiary': '#9ca0b0',
+      '--accent': '#8839ef',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#e5d4fc',
+      '--accent-glow': 'rgba(136,57,239,0.1)',
+      '--green': '#40a02b',
+      '--red': '#d20f39',
+      '--amber': '#df8e1d',
+    }
+  },
+
+  nord: {
+    label: 'Nord',
+    description: 'Arctic, north-bluish',
+    preview: ['#2e3440', '#3b4252', '#88c0d0', '#eceff4'],
+    vars: {
+      '--bg-primary': '#2e3440',
+      '--bg-secondary': '#3b4252',
+      '--bg-tertiary': '#434c5e',
+      '--bg-elevated': '#4c566a',
+      '--bg-hover': '#5a6477',
+      '--border': '#4c566a',
+      '--border-subtle': '#434c5e',
+      '--text-primary': '#eceff4',
+      '--text-secondary': '#e5e9f0',
+      '--text-tertiary': '#7b88a1',
+      '--accent': '#88c0d0',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#1e3040',
+      '--accent-glow': 'rgba(136,192,208,0.15)',
+      '--green': '#a3be8c',
+      '--red': '#bf616a',
+      '--amber': '#ebcb8b',
+    }
+  },
+
+  tokyo_night: {
+    label: 'Tokyo Night',
+    description: 'City lights after dark',
+    preview: ['#1a1b26', '#16161e', '#7aa2f7', '#c0caf5'],
+    vars: {
+      '--bg-primary': '#1a1b26',
+      '--bg-secondary': '#16161e',
+      '--bg-tertiary': '#1f2335',
+      '--bg-elevated': '#24283b',
+      '--bg-hover': '#292e42',
+      '--border': '#292e42',
+      '--border-subtle': '#1f2335',
+      '--text-primary': '#c0caf5',
+      '--text-secondary': '#a9b1d6',
+      '--text-tertiary': '#565f89',
+      '--accent': '#7aa2f7',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#1a2342',
+      '--accent-glow': 'rgba(122,162,247,0.15)',
+      '--green': '#9ece6a',
+      '--red': '#f7768e',
+      '--amber': '#e0af68',
+    }
+  },
+
+  solarized: {
+    label: 'Solarized Dark',
+    description: 'Precision colors for machines',
+    preview: ['#002b36', '#073642', '#268bd2', '#839496'],
+    vars: {
+      '--bg-primary': '#002b36',
+      '--bg-secondary': '#073642',
+      '--bg-tertiary': '#083f4d',
+      '--bg-elevated': '#0a4555',
+      '--bg-hover': '#0d5060',
+      '--border': '#0d5060',
+      '--border-subtle': '#083f4d',
+      '--text-primary': '#839496',
+      '--text-secondary': '#657b83',
+      '--text-tertiary': '#4a6068',
+      '--accent': '#268bd2',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#0a2a3d',
+      '--accent-glow': 'rgba(38,139,210,0.15)',
+      '--green': '#859900',
+      '--red': '#dc322f',
+      '--amber': '#b58900',
+    }
+  },
+
+  dracula: {
+    label: 'Dracula',
+    description: 'Dark theme for the night owl',
+    preview: ['#282a36', '#1e1f29', '#bd93f9', '#f8f8f2'],
+    vars: {
+      '--bg-primary': '#282a36',
+      '--bg-secondary': '#1e1f29',
+      '--bg-tertiary': '#313244',
+      '--bg-elevated': '#44475a',
+      '--bg-hover': '#4d5068',
+      '--border': '#44475a',
+      '--border-subtle': '#313244',
+      '--text-primary': '#f8f8f2',
+      '--text-secondary': '#e0e0e8',
+      '--text-tertiary': '#6272a4',
+      '--accent': '#bd93f9',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#2a1f45',
+      '--accent-glow': 'rgba(189,147,249,0.15)',
+      '--green': '#50fa7b',
+      '--red': '#ff5555',
+      '--amber': '#ffb86c',
+    }
+  },
+
+  rose_pine: {
+    label: 'Rosé Pine',
+    description: 'All natural pine, faux fur',
+    preview: ['#191724', '#1f1d2e', '#c4a7e7', '#e0def4'],
+    vars: {
+      '--bg-primary': '#191724',
+      '--bg-secondary': '#1f1d2e',
+      '--bg-tertiary': '#26233a',
+      '--bg-elevated': '#2a2837',
+      '--bg-hover': '#31304a',
+      '--border': '#31304a',
+      '--border-subtle': '#26233a',
+      '--text-primary': '#e0def4',
+      '--text-secondary': '#c5c3d6',
+      '--text-tertiary': '#6e6a86',
+      '--accent': '#c4a7e7',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#2a1f3d',
+      '--accent-glow': 'rgba(196,167,231,0.15)',
+      '--green': '#9ccfd8',
+      '--red': '#eb6f92',
+      '--amber': '#f6c177',
+    }
+  },
+
+  midnight_blue: {
+    label: 'Midnight Blue',
+    description: 'Deep navy with electric blue — bold and immersive',
+    preview: ['#070d1a', '#0d1629', '#3b9eff', '#c8e0ff'],
+    vars: {
+      '--bg-primary': '#070d1a',
+      '--bg-secondary': '#0d1629',
+      '--bg-tertiary': '#112040',
+      '--bg-elevated': '#162850',
+      '--bg-hover': '#1c3060',
+      '--border': '#1c3060',
+      '--border-subtle': '#112040',
+      '--text-primary': '#c8e0ff',
+      '--text-secondary': '#7aacff',
+      '--text-tertiary': '#3a5880',
+      '--accent': '#3b9eff',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#0a1e40',
+      '--accent-glow': 'rgba(59,158,255,0.15)',
+      '--green': '#4ade80',
+      '--red': '#f87171',
+      '--amber': '#fbbf24',
+    }
+  },
+
+  cyberpunk: {
+    label: 'Cyberpunk',
+    description: 'Dark neon with hot pink — electric and futuristic',
+    preview: ['#0a0010', '#110020', '#ff00aa', '#f0d0ff'],
+    vars: {
+      '--bg-primary': '#0a0010',
+      '--bg-secondary': '#110020',
+      '--bg-tertiary': '#1a0030',
+      '--bg-elevated': '#240040',
+      '--bg-hover': '#2e0050',
+      '--border': '#3d0070',
+      '--border-subtle': '#1a0030',
+      '--text-primary': '#f0d0ff',
+      '--text-secondary': '#c080ff',
+      '--text-tertiary': '#803080',
+      '--accent': '#ff00aa',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#3d0025',
+      '--accent-glow': 'rgba(255,0,170,0.18)',
+      '--green': '#00ff9d',
+      '--red': '#ff3860',
+      '--amber': '#ffdd00',
+    }
+  },
+
+  forest: {
+    label: 'Forest',
+    description: 'Deep green with emerald — lush and organic',
+    preview: ['#0a1a0d', '#0f2214', '#00c896', '#c8f0d0'],
+    vars: {
+      '--bg-primary': '#0a1a0d',
+      '--bg-secondary': '#0f2214',
+      '--bg-tertiary': '#152d1a',
+      '--bg-elevated': '#1c3a21',
+      '--bg-hover': '#244a2a',
+      '--border': '#244a2a',
+      '--border-subtle': '#152d1a',
+      '--text-primary': '#c8f0d0',
+      '--text-secondary': '#7acc90',
+      '--text-tertiary': '#3a6644',
+      '--accent': '#00c896',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#003325',
+      '--accent-glow': 'rgba(0,200,150,0.15)',
+      '--green': '#5af0a0',
+      '--red': '#ff6b6b',
+      '--amber': '#ffd166',
+    }
+  },
+
+  sunset: {
+    label: 'Sunset',
+    description: 'Warm dark amber with golden orange — rich and warm',
+    preview: ['#130b00', '#1e1100', '#ff9900', '#ffe8c8'],
+    vars: {
+      '--bg-primary': '#130b00',
+      '--bg-secondary': '#1e1100',
+      '--bg-tertiary': '#2a1800',
+      '--bg-elevated': '#382200',
+      '--bg-hover': '#452c00',
+      '--border': '#503500',
+      '--border-subtle': '#2a1800',
+      '--text-primary': '#ffe8c8',
+      '--text-secondary': '#e0b880',
+      '--text-tertiary': '#805030',
+      '--accent': '#ff9900',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#3d2200',
+      '--accent-glow': 'rgba(255,153,0,0.15)',
+      '--green': '#7cb87a',
+      '--red': '#ff5555',
+      '--amber': '#ffcc44',
+    }
+  },
+
+  executive: {
+    label: 'Executive',
+    description: 'Dark navy with antique gold — formal and authoritative',
+    preview: ['#0a0d1a', '#101525', '#c8a840', '#ddd0b0'],
+    vars: {
+      '--bg-primary': '#0a0d1a',
+      '--bg-secondary': '#101525',
+      '--bg-tertiary': '#161d32',
+      '--bg-elevated': '#1e273f',
+      '--bg-hover': '#25304e',
+      '--border': '#2c3a5a',
+      '--border-subtle': '#161d32',
+      '--text-primary': '#ddd0b0',
+      '--text-secondary': '#b0a080',
+      '--text-tertiary': '#605840',
+      '--accent': '#c8a840',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#2d2000',
+      '--accent-glow': 'rgba(200,168,64,0.15)',
+      '--green': '#6ab87a',
+      '--red': '#c85050',
+      '--amber': '#d4933a',
+    }
+  },
+
+  parchment: {
+    label: 'Parchment',
+    description: 'Cream and sepia — classic and scholarly',
+    preview: ['#f5f0e8', '#ede7d8', '#8b4513', '#2a1f10'],
+    vars: {
+      '--bg-primary': '#f5f0e8',
+      '--bg-secondary': '#ede7d8',
+      '--bg-tertiary': '#e5ddc8',
+      '--bg-elevated': '#f8f4ec',
+      '--bg-hover': '#ddd5c0',
+      '--border': '#c8bea8',
+      '--border-subtle': '#e0d8c5',
+      '--text-primary': '#2a1f10',
+      '--text-secondary': '#5a4830',
+      '--text-tertiary': '#9a8868',
+      '--accent': '#8b4513',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#f0e8d8',
+      '--accent-glow': 'rgba(139,69,19,0.12)',
+      '--selection-bg': 'rgba(139,69,19,0.25)',
+      '--green': '#3a7a3a',
+      '--red': '#9a2020',
+      '--amber': '#b87820',
+    }
+  },
+
+  slate_pro: {
+    label: 'Slate Pro',
+    description: 'Blue-grey with sky blue — professional and crisp',
+    preview: ['#1a1f2e', '#1f2540', '#4a90d9', '#d0d8f0'],
+    vars: {
+      '--bg-primary': '#1a1f2e',
+      '--bg-secondary': '#1f2540',
+      '--bg-tertiary': '#252c4a',
+      '--bg-elevated': '#2c3455',
+      '--bg-hover': '#333d64',
+      '--border': '#3a4570',
+      '--border-subtle': '#252c4a',
+      '--text-primary': '#d0d8f0',
+      '--text-secondary': '#90a0c8',
+      '--text-tertiary': '#505880',
+      '--accent': '#4a90d9',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#0a1a30',
+      '--accent-glow': 'rgba(74,144,217,0.15)',
+      '--green': '#5ab880',
+      '--red': '#e86060',
+      '--amber': '#dba840',
+    }
+  },
+
+  monokai: {
+    label: 'Monokai',
+    description: 'The classic developer color scheme',
+    preview: ['#272822', '#1e1f1a', '#ae81ff', '#f8f8f2'],
+    vars: {
+      '--bg-primary': '#272822',
+      '--bg-secondary': '#1e1f1a',
+      '--bg-tertiary': '#2d2e27',
+      '--bg-elevated': '#383930',
+      '--bg-hover': '#44453c',
+      '--border': '#44453c',
+      '--border-subtle': '#2d2e27',
+      '--text-primary': '#f8f8f2',
+      '--text-secondary': '#cfcfc2',
+      '--text-tertiary': '#75715e',
+      '--accent': '#ae81ff',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#2a1f45',
+      '--accent-glow': 'rgba(174,129,255,0.15)',
+      '--green': '#a6e22e',
+      '--red': '#f92672',
+      '--amber': '#e6db74',
+    }
+  },
+
+  high_contrast: {
+    label: 'High Contrast',
+    description: 'Pure black with vivid yellow — maximum readability',
+    preview: ['#000000', '#0a0a0a', '#f5e642', '#ffffff'],
+    vars: {
+      '--bg-primary': '#000000',
+      '--bg-secondary': '#0a0a0a',
+      '--bg-tertiary': '#111111',
+      '--bg-elevated': '#1a1a1a',
+      '--bg-hover': '#222222',
+      '--border': '#333333',
+      '--border-subtle': '#1a1a1a',
+      '--text-primary': '#ffffff',
+      '--text-secondary': '#cccccc',
+      '--text-tertiary': '#888888',
+      '--accent': '#f5e642',
+      '--accent-text': '#000000',
+      '--accent-dim': '#2a2600',
+      '--accent-glow': 'rgba(245,230,66,0.15)',
+      '--green': '#00ff00',
+      '--red': '#ff4444',
+      '--amber': '#ffaa00',
+    }
+  },
+
+  espresso: {
+    label: 'Espresso',
+    description: 'Coffee brown with copper — warm and inviting',
+    preview: ['#1a1008', '#221508', '#d4773a', '#f5e8d0'],
+    vars: {
+      '--bg-primary': '#1a1008',
+      '--bg-secondary': '#221508',
+      '--bg-tertiary': '#2e1d0d',
+      '--bg-elevated': '#3c2714',
+      '--bg-hover': '#4a321c',
+      '--border': '#5a3d22',
+      '--border-subtle': '#2e1d0d',
+      '--text-primary': '#f5e8d0',
+      '--text-secondary': '#d0b080',
+      '--text-tertiary': '#806040',
+      '--accent': '#d4773a',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#3d1800',
+      '--accent-glow': 'rgba(212,119,58,0.15)',
+      '--green': '#7aaa6a',
+      '--red': '#d45555',
+      '--amber': '#e0a040',
+    }
+  },
+
+  winxp: {
+    label: 'Windows XP',
+    description: 'Luna blue and silver — early-2000s Windows',
+    preview: ['#ece9d8', '#ffffff', '#2a5fd8', '#0a0a0a'],
+    vars: {
+      '--bg-primary': '#ece9d8',
+      '--bg-secondary': '#ffffff',
+      '--bg-tertiary': '#f4f2e8',
+      '--bg-elevated': '#ffffff',
+      '--bg-hover': '#d8e6fb',
+      '--border': '#aca899',
+      '--border-subtle': '#d4d0c8',
+      '--text-primary': '#0a0a0a',
+      '--text-secondary': '#48453c',
+      '--text-tertiary': '#7c7868',
+      '--accent': '#2a5fd8',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#cbdcf7',
+      '--accent-glow': 'rgba(42,95,216,0.18)',
+      '--green': '#2f9e2f',
+      '--red': '#d42d2d',
+      '--amber': '#e39400',
+    }
+  },
+
+  win9x: {
+    label: 'Windows Classic',
+    description: 'Battleship grey and navy — 95/98/2000 chrome',
+    preview: ['#c0c0c0', '#ffffff', '#000080', '#000000'],
+    vars: {
+      '--bg-primary': '#c0c0c0',
+      '--bg-secondary': '#ffffff',
+      '--bg-tertiary': '#cececa',
+      '--bg-elevated': '#c0c0c0',
+      '--bg-hover': '#cddaf0',
+      '--border': '#808080',
+      '--border-subtle': '#dfdfdf',
+      '--text-primary': '#000000',
+      '--text-secondary': '#3d3d3d',
+      '--text-tertiary': '#6e6e6e',
+      '--accent': '#000080',
+      '--accent-text': '#ffffff',
+      '--accent-dim': '#c6d4ec',
+      '--accent-glow': 'rgba(0,0,128,0.15)',
+      '--green': '#008000',
+      '--red': '#a80000',
+      '--amber': '#9a6a00',
+    }
+  },
+};
+
+// ── Color helpers ────────────────────────────────────────────────────────────
+
+function hexToRgb(hex) {
+  return [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
+}
+
+function lighten(hex, t) {
+  return '#' + hexToRgb(hex)
+    .map(c => Math.min(255, Math.round(c + (255 - c) * t)).toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function darken(hex, t) {
+  return '#' + hexToRgb(hex)
+    .map(c => Math.round(c * (1 - t)).toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function buildFaviconSvg(accent, count = 0) {
+  const light = lighten(accent, 0.25);
+  const dark  = darken(accent, 0.30);
+  const [dr, dg, db] = hexToRgb(dark);
+
+  let badge = '';
+  if (count > 0) {
+    const label = count > 99 ? '99+' : String(count);
+    const r  = label.length > 2 ? 10 : 11;
+    const cx = 32 - r;
+    const cy = r;
+    const fs = label.length > 2 ? 8 : label.length > 1 ? 12 : 14;
+    badge = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#ef4444" stroke="white" stroke-width="1.5"/>` +
+            `<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" ` +
+            `fill="white" font-family="system-ui,sans-serif" font-weight="800" font-size="${fs}">${label}</text>`;
+  }
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="${light}"/>
+      <stop offset="100%" stop-color="${dark}"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.14)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+    </linearGradient>
+    <clipPath id="ec">
+      <rect x="5" y="10.5" width="22" height="15" rx="2.5"/>
+    </clipPath>
+  </defs>
+  <rect width="32" height="32" rx="7.5" fill="url(#bg)"/>
+  <rect width="32" height="16" rx="7.5" fill="url(#shine)"/>
+  <rect x="5" y="11.5" width="22" height="15" rx="2.5" fill="rgba(0,0,0,0.18)"/>
+  <rect x="5" y="10.5" width="22" height="15" rx="2.5" fill="white"/>
+  <path d="M5,10.5 L16,20.5 L27,10.5 Z" fill="rgba(${dr},${dg},${db},0.10)" clip-path="url(#ec)"/>
+  <path d="M5,10.5 L16,20.5 L27,10.5" fill="none" stroke="rgba(${dr},${dg},${db},0.38)" stroke-width="1.4" stroke-linejoin="round" clip-path="url(#ec)"/>
+  <line x1="5" y1="25.5" x2="13" y2="20" stroke="rgba(${dr},${dg},${db},0.16)" stroke-width="1.1"/>
+  <line x1="27" y1="25.5" x2="19" y2="20" stroke="rgba(${dr},${dg},${db},0.16)" stroke-width="1.1"/>
+  ${badge}
+</svg>`;
+}
+
+// ── Sender avatar color ───────────────────────────────────────────────────────
+
+const SENDER_PALETTE = [
+  '#dc2626', // red
+  '#ea580c', // orange
+  '#d97706', // amber
+  '#65a30d', // lime
+  '#16a34a', // green
+  '#059669', // emerald
+  '#0d9488', // teal
+  '#0891b2', // cyan
+  '#0284c7', // sky
+  '#2563eb', // blue
+  '#4f46e5', // indigo
+  '#7c3aed', // violet
+  '#9333ea', // purple
+  '#c026d3', // fuchsia
+  '#db2777', // pink
+  '#e11d48', // rose
+];
+
+function hashIndex(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return h % SENDER_PALETTE.length;
+}
+
+export function senderColor(email) {
+  const key = (email || '').toLowerCase().trim();
+  return SENDER_PALETTE[key ? hashIndex(key) : 0];
+}
+
+// ── Custom CSS injection ───────────────────────────────────────────────────────
+
+const CUSTOM_CSS_ID = 'mailflow-custom-css';
+
+export function applyCustomCss(css) {
+  let el = document.getElementById(CUSTOM_CSS_ID);
+  if (!css) {
+    if (el) el.remove();
+    refreshAccentDerived(); // revert favicon/logo if the removed CSS was overriding --accent
+    return;
+  }
+  if (!el) {
+    el = document.createElement('style');
+    el.id = CUSTOM_CSS_ID;
+    document.head.appendChild(el);
+  }
+  el.textContent = css;
+  refreshAccentDerived(); // flow a custom --accent override through to favicon/logo
+}
+
+// ── Theme application ─────────────────────────────────────────────────────────
+
+let _activeTheme = 'system';
+let _mediaQueryListenerAttached = false;
+
+function _onSystemThemeChange() {
+  if (_activeTheme === 'system') {
+    applyTheme('system');
+  }
+}
+
+// Returns the concrete theme name ('light', 'dark', etc.) for a theme key.
+// When given 'system', inspects the OS light/dark preference.
+export function resolveEffectiveTheme(themeName) {
+  if (themeName === 'system') {
+    try {
+      if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches) {
+        return 'light';
+      }
+    } catch { /* matchMedia unavailable — fall through to dark */ }
+    return 'dark';
+  }
+  return THEMES[themeName] ? themeName : 'dark';
+}
+
+// The theme to use before any stored/server preference is known — i.e. on the
+// login screen and the very first visit. Honors the OS light/dark setting via 'system'.
+export function getInitialTheme() {
+  return 'system';
+}
+
+// ── Effective accent (theme value, or a custom-CSS override of --accent) ───────
+
+// The accent actually in effect. A custom-CSS override of --accent wins over the
+// theme's declared value, so JS-driven chrome (favicon, PWA theme-color, the logo
+// mark) reads the *computed* value to match what var(--accent) resolves to in CSS.
+export function getEffectiveAccent(fallback = '#7c6af7') {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    return v || fallback;
+  } catch { return fallback; }
+}
+
+// Subscribers (e.g. the logo mark) notified when the effective accent changes, so
+// they update on a custom-CSS accent override too — not only on a theme switch.
+const _accentListeners = new Set();
+export function subscribeAccent(fn) {
+  _accentListeners.add(fn);
+  return () => { _accentListeners.delete(fn); };
+}
+
+// Recompute everything derived from the accent (favicon, PWA theme-color, logo)
+// from the *effective* accent. Called after both applyTheme and applyCustomCss so
+// the accent's source (preset theme or custom override) doesn't matter.
+function refreshAccentDerived() {
+  const accent = getEffectiveAccent();
+  if (!accent.startsWith('#')) return; // favicon rasteriser + meta expect a hex colour
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', accent);
+  // Only invalidate the base favicon cache when the accent actually changed — the
+  // double applyTheme at startup (localStorage then server prefs) usually repeats it.
+  if (_baseAccent !== accent) {
+    _baseCanvas = null;
+    _baseAccent = null;
+  }
+  _applyFavicon(accent);
+  if (_badgeCount > 0) _warmBase(accent);
+  _accentListeners.forEach(fn => {
+    try { fn(accent); } catch { /* a listener error must not break theming */ }
+  });
+}
+
+export function applyTheme(themeName) {
+  _activeTheme = themeName || 'system';
+
+  if (!_mediaQueryListenerAttached && typeof window !== 'undefined' && window.matchMedia) {
+    try {
+      const mq = window.matchMedia('(prefers-color-scheme: light)');
+      mq.addEventListener?.('change', _onSystemThemeChange);
+      _mediaQueryListenerAttached = true;
+    } catch { /* matchMedia listener unavailable */ }
+  }
+
+  const effectiveKey = resolveEffectiveTheme(themeName);
+  const theme = THEMES[effectiveKey] || THEMES.dark;
+
+  // Expose the active theme as an attribute so a theme can layer scoped skeuomorphic
+  // chrome (beveled scrollbars, selection tint) via CSS in index.css without adding
+  // structural tokens to every palette. Retro themes (winxp/win9x) use this.
+  document.documentElement.setAttribute('data-mailflow-theme', themeName === 'system' ? effectiveKey : (THEMES[themeName] ? themeName : 'dark'));
+
+  // Inject vars via a <style> element rather than root.style.setProperty so
+  // that <style id="mailflow-custom-css"> (appended afterward) can override
+  // theme variables at equal specificity using normal cascade source order.
+  let themeEl = document.getElementById('mailflow-theme');
+  if (!themeEl) {
+    themeEl = document.createElement('style');
+    themeEl.id = 'mailflow-theme';
+    document.head.appendChild(themeEl);
+  }
+
+  if (themeName === 'system') {
+    themeEl.textContent = `:root {\n${
+      Object.entries(THEMES.dark.vars).map(([k, v]) => `  ${k}: ${v};`).join('\n')
+    }\n  color-scheme: dark;\n}\n@media (prefers-color-scheme: light) {\n  :root {\n${
+      Object.entries(THEMES.light.vars).map(([k, v]) => `    ${k}: ${v};`).join('\n')
+    }\n    color-scheme: light;\n  }\n}`;
+  } else {
+    themeEl.textContent = `:root {\n${
+      Object.entries(theme.vars).map(([k, v]) => `  ${k}: ${v};`).join('\n')
+    }\n  color-scheme: ${effectiveKey === 'light' ? 'light' : 'dark'};\n}`;
+  }
+
+  // Recompute favicon + PWA theme-color + logo from the *effective* accent. If a
+  // custom-CSS override of --accent is present, getComputedStyle picks it up here;
+  // applyCustomCss also re-runs this so an override applied afterwards is reflected.
+  refreshAccentDerived();
+}
+
+// ── Favicon badge ─────────────────────────────────────────────────────────────
+
+const FAVICON_PX = 32;
+let _badgeCount  = 0;
+let _renderSeq   = 0;
+let _appliedSeq  = 0;
+
+// Cached rasterization of the base favicon (envelope icon, no badge).
+// Once populated, badge updates are drawn synchronously with Canvas 2D —
+// no SVG → Image → onload round-trip needed.
+let _baseCanvas = null;
+let _baseAccent = null;
+
+// Persistent <link rel="icon"> element. We update href in-place rather than
+// removing/adding the element each time. DOM remove+add causes Chrome to briefly
+// show no favicon between the two mutations, making updates appear sluggish.
+let _faviconLink = null;
+
+function _setFaviconLink(dataUri) {
+  if (!_faviconLink || !_faviconLink.isConnected) {
+    // Reuse the existing icon element from index.html on first call so Chrome
+    // processes a href change on a known element rather than discovering a new one.
+    _faviconLink = document.querySelector("link[rel='icon']") || (() => {
+      const el = document.createElement('link');
+      el.rel = 'icon';
+      document.head.appendChild(el);
+      return el;
+    })();
+    // Remove any competing icon links (e.g. a second link added by HMR or SSR)
+    // but leave apple-touch-icon and other non-standard rel values alone.
+    document.querySelectorAll("link[rel='icon']").forEach(l => {
+      if (l !== _faviconLink) l.remove();
+    });
+  }
+  _faviconLink.type = 'image/png';
+  _faviconLink.href = dataUri;
+}
+
+function _rasterise(svgStr, onCanvas) {
+  const blob = new Blob([svgStr], { type: 'image/svg+xml' });
+  const url  = URL.createObjectURL(blob);
+  const img  = new Image(FAVICON_PX, FAVICON_PX);
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    const canvas = document.createElement('canvas');
+    canvas.width  = FAVICON_PX;
+    canvas.height = FAVICON_PX;
+    canvas.getContext('2d').drawImage(img, 0, 0, FAVICON_PX, FAVICON_PX);
+    onCanvas(canvas);
+  };
+  img.onerror = () => URL.revokeObjectURL(url);
+  img.src = url;
+}
+
+function _warmBase(accent) {
+  if (_baseCanvas && _baseAccent === accent) return;
+  _rasterise(buildFaviconSvg(accent, 0), (canvas) => {
+    if (_baseCanvas && _baseAccent === accent) return; // lost the race
+    _baseCanvas = canvas;
+    _baseAccent = accent;
+  });
+}
+
+function _applyFavicon(accent) {
+  // Rasterise the SVG to a canvas and export as PNG. PNG data URIs go through
+  // the browser's image pipeline rather than the document pipeline, which avoids
+  // the Chromium quirk where SVG favicons are silently reverted to the cached
+  // on-disk file after tab focus changes.
+  const isBase = _badgeCount === 0; // capture before any async gap
+  const seq    = ++_renderSeq;
+  _rasterise(buildFaviconSvg(accent, _badgeCount), (canvas) => {
+    // Cache the no-badge render as the base so all future badge updates can
+    // skip the async round-trip and draw synchronously via Canvas 2D.
+    // Do this before the seq guard so the cache is always populated, even
+    // if a later render has already applied its result to the DOM.
+    if (isBase && !_baseCanvas) {
+      _baseCanvas = canvas;
+      _baseAccent = accent;
+    }
+
+    // Only skip this render if a *later* render already applied its result.
+    if (seq < _appliedSeq) return;
+    _appliedSeq = seq;
+    _setFaviconLink(canvas.toDataURL('image/png'));
+  });
+}
+
+export function updateFaviconBadge(count) {
+  _badgeCount = count;
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  if (!accent || !accent.startsWith('#')) return;
+
+  // Fast synchronous path: base favicon is cached — composite badge directly.
+  if (_baseCanvas && _baseAccent === accent) {
+    // Advance the sequence counter so any in-flight slow-path renders that
+    // complete later are treated as stale and don't overwrite this result.
+    _appliedSeq = ++_renderSeq;
+
+    const canvas = document.createElement('canvas');
+    canvas.width  = FAVICON_PX;
+    canvas.height = FAVICON_PX;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(_baseCanvas, 0, 0);
+
+    if (count > 0) {
+      const label = count > 99 ? '99+' : String(count);
+      const r  = label.length > 2 ? 10 : 11;
+      const cx = FAVICON_PX - r;
+      const cy = r;
+      const fs = label.length > 2 ? 8 : label.length > 1 ? 12 : 14;
+      // White border (filled circle, slightly larger than the badge)
+      ctx.beginPath();
+      ctx.arc(cx, cy, r + 1.5, 0, 2 * Math.PI);
+      ctx.fillStyle = 'white';
+      ctx.fill();
+      // Red badge
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+      ctx.fillStyle = '#ef4444';
+      ctx.fill();
+      // White label
+      ctx.fillStyle = 'white';
+      ctx.font = `800 ${fs}px system-ui,sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, cx, cy + 0.5);
+    }
+
+    _setFaviconLink(canvas.toDataURL('image/png'));
+    return;
+  }
+
+  // Slow path: base not cached yet (first render or theme change) — use async
+  // SVG rasterization. Also warm the base cache separately so the next badge
+  // update can use the fast synchronous path, even if _badgeCount > 0 now
+  // (which would prevent _applyFavicon from auto-caching the base).
+  _applyFavicon(accent);
+  if (_badgeCount > 0) _warmBase(accent);
+}

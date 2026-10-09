@@ -1,0 +1,1359 @@
+import { create } from 'zustand';
+import { resolveConversationMode, groupsMessageList, conversationModeTransition, isConversationMode } from '../utils/conversationMode.js';
+import { api } from '../utils/api.js';
+import { mergeCountSnapshots, adjustCountPending, expireCountPending, settleCountPending, displayCountSnapshot, mergeFolderSnapshots } from '../utils/countSnapshots.js';
+import { resolveSelectedAccount, pruneFolders } from '../utils/accountScope.js';
+import { aiRuns } from '../utils/aiRunRegistry.js';
+import { applyTheme, applyCustomCss, getInitialTheme } from '../themes.js';
+import { applyFontSet, applyFontSize, effectiveFontSet, isRetroFont, THEME_FONT } from '../fonts.js';
+import { applyLayout, normalizeLayout } from '../layouts.js';
+import { DEFAULT_AI_ACTIONS } from '../aiActions.js';
+import {
+  removeGtdThreadFromSections,
+  restoreGtdThreadRemoval,
+  setGtdThreadReadInSections,
+  snapshotGtdThreadRemoval,
+  appendMessagesByIdentity,
+  dedupeByIdentity,
+  missingByIdentity,
+} from '../utils/gtd.js';
+import { applyGtdRemovalGuard } from '../utils/pendingGtdRemovals.js';
+import { DEFAULT_HOVER_ACTIONS, sanitizeHoverActionSet } from '../utils/hoverActions.js';
+import { clampRightSidebarWidth } from '../utils/rightSidebar.js';
+import {
+  cacheFolderOrderFromPreferences,
+  mergeFolderOrder,
+  readFolderOrder,
+} from './folderOrder.js';
+import { removeThreadCacheEntry } from '../utils/threadedArchive.js';
+import i18n, { initialLanguage } from '../i18n.js';
+import { createPrefSaveQueue } from '../utils/prefSaveQueue.js';
+
+// Accumulate rapid preference changes and flush at most once per second. The queue itself
+// lives in prefSaveQueue.js so its behaviour is testable without a network or a DOM.
+const _prefQueue = createPrefSaveQueue({
+  save: (prefs) => api.savePreferences(prefs),
+  saveOnExit: (prefs) => api.savePreferencesOnExit(prefs),
+  delayMs: 1000,
+  onError: (err, keys) => {
+    // Previously `.catch(() => {})`. A preference that failed to save said nothing and then
+    // reverted on the next load, when loadPreferences overwrote localStorage with the older
+    // server value. Naming the keys makes that diagnosable instead of a mystery.
+    console.error(`Failed to save preference(s): ${keys.join(', ')}`, err?.message || err);
+  },
+});
+
+function schedulePrefSave(prefs) {
+  _prefQueue.schedule(prefs);
+}
+
+// Drop any queued preference flush. Called on logout / account switch: a pending debounce
+// belongs to the previous user's session, so letting it fire would either save into the new
+// user's account or hit a dead session (401). The prefs are already applied locally; only the
+// deferred network write is discarded.
+function cancelPendingPrefSave() {
+  _prefQueue.cancel();
+}
+
+// Write anything still queued before the page can go away. Without this a setting changed
+// inside the debounce window was lost outright, and because it had already been written to
+// localStorage the UI looked correct until the next load hydrated the older server value
+// back over it, so the setting appeared to revert on its own.
+//
+// pagehide plus visibilitychange rather than beforeunload: beforeunload does not fire
+// reliably on mobile, where the page is frozen or discarded instead. visibilitychange also
+// covers tab switches and app backgrounding, which simply means the write lands sooner.
+if (typeof window !== 'undefined') {
+  const flushOnExit = () => _prefQueue.flush({ exiting: true });
+  window.addEventListener('pagehide', flushOnExit);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushOnExit();
+  });
+}
+
+// GTD sections fetch coordination. A monotonic seq guards against stale
+// responses landing after a newer context switch; the timer debounces the
+// WS-driven refetch (gtd_sections_updated can fire several times per tick).
+let _gtdSectionsSeq = 0;
+let _gtdFetchTimer = null;
+
+function readGtdCollapsedSections() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('mailflow_gtd_collapsed_sections') || 'null');
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  } catch { /* fall through to default */ }
+  // Someday is collapsed by default — lowest-priority section, out of the way
+  // until the user wants it.
+  return { someday: true };
+}
+
+let pendingCountTimer;
+function expirePendingCounts() {
+  clearTimeout(pendingCountTimer);
+  const deadlines = Object.values(useStore.getState().pendingCounts).map(p => p.expiresAt);
+  if (!deadlines.length) { pendingCountTimer = null; return; }
+  pendingCountTimer = setTimeout(() => {
+    pendingCountTimer = null;
+    const state = useStore.getState();
+    if (state.isLocked) return;
+    const pending = expireCountPending(state.pendingCounts);
+    useStore.setState({ pendingCounts: pending,
+      unreadCounts: displayCountSnapshot(state.serverUnreadCounts, pending, state.accounts) });
+    if (Object.keys(pending).length) expirePendingCounts();
+    window.dispatchEvent(new CustomEvent('mailflow:counts_refresh'));
+  }, Math.max(1, Math.min(...deadlines) - Date.now()));
+}
+
+export const useStore = create((set, get) => ({
+  // Auth
+  user: null,
+  setUser: (user) => {
+    // On a real identity change (login, logout, account switch) drop any queued preference
+    // flush so the previous user's debounce can't save into the new/absent session.
+    if (get().user?.id !== user?.id) {
+      cancelPendingPrefSave();
+      clearTimeout(pendingCountTimer);
+      pendingCountTimer = null;
+      // AI runs deliberately outlive the message pane, so nothing else would stop one here. A
+      // run that outlived a logout would finish and write the previous user's result into this
+      // device's cache, under their message id, for whoever signs in next.
+      aiRuns.abortAll();
+    }
+    set(state => ({
+      user,
+      ...(state.user?.id !== user?.id ? {
+        serverUnreadCounts: { total: 0, byAccount: {}, snapshots: {} }, pendingCounts: {},
+        unreadCounts: { total: 0, byAccount: {}, snapshots: {}, complete: false },
+        senderFaviconsLoaded: false,
+        senderFavicons: false,
+        senderFaviconsSaving: false,
+      } : {}),
+    }));
+  },
+  updateUser: (updates) => set(state => ({ user: state.user ? { ...state.user, ...updates } : state.user })),
+
+  // Plugin activation — the per-user set of activated plugin ids (users.preferences.enabledPlugins).
+  // Hydrated in loadPreferences and mutated only via setPluginActivated (the Plugins settings
+  // section). Independent of a plugin's own per-account config; a plugin's UI gates on membership
+  // here (e.g. GTD's gtdActiveForContext requires 'gtd' to be present).
+  enabledPlugins: [],
+  setPluginActivated: async (id, activated) => {
+    await api.plugins.setActivated(id, activated);
+    set(state => {
+      const next = new Set(state.enabledPlugins);
+      if (activated) next.add(id); else next.delete(id);
+      return { enabledPlugins: [...next] };
+    });
+  },
+
+  // Todoist integration status (persisted across page loads via localStorage)
+  todoistConnected: localStorage.getItem('mailflow_todoist_connected') === '1',
+  setTodoistConnected: (connected) => {
+    if (connected) localStorage.setItem('mailflow_todoist_connected', '1');
+    else localStorage.removeItem('mailflow_todoist_connected');
+    set({ todoistConnected: connected });
+  },
+
+  // Lock screen
+  isLocked: localStorage.getItem('mailflow_locked') === '1',
+  setLocked: (locked) => {
+    if (locked) {
+      const { selectedMessageId } = get();
+      if (selectedMessageId) localStorage.setItem('mailflow_locked_message', selectedMessageId);
+      localStorage.setItem('mailflow_locked', '1');
+      clearTimeout(pendingCountTimer);
+      pendingCountTimer = null;
+      // Same reasoning as an identity change: locking is the user stepping away, and a result
+      // landing in the cache behind the lock screen is the thing the lock exists to prevent.
+      aiRuns.abortAll();
+      set({
+        serverUnreadCounts: { total: 0, byAccount: {}, snapshots: {} }, pendingCounts: {},
+        isLocked: true,
+        messages: [], searchResults: [], searchQuery: '',
+        accounts: [], accountsReady: false,
+        folders: {}, selectedMessageId: null,
+        unreadCounts: { total: 0, byAccount: {} },
+        notifications: [], threadMessages: {}, expandedThreadId: null,
+        backfillProgress: {},
+        gtdSections: null, categoryCounts: {}, activeGtdTab: null,
+      });
+    } else {
+      const restoredMessageId = localStorage.getItem('mailflow_locked_message') || null;
+      localStorage.removeItem('mailflow_locked_message');
+      localStorage.removeItem('mailflow_locked');
+      set({ isLocked: false, selectedMessageId: restoredMessageId });
+    }
+  },
+  // Lock now: tell the server (it then 423s the API until unlocked), then drop into
+  // the lock overlay locally. Lock the UI even if the server call fails (#235).
+  lockScreen: () => {
+    // Lock the UI immediately (never block on the network), then enforce server-side.
+    get().setLocked(true);
+    api.lock().catch(() => {});
+  },
+  autoLockMinutes: 0,
+  setAutoLockMinutes: (m) => {
+    const v = [0, 1, 5, 15, 30].includes(Number(m)) ? Number(m) : 0;
+    set({ autoLockMinutes: v });
+    schedulePrefSave({ autoLockMinutes: String(v) });
+  },
+
+  // Accounts
+  accounts: [],
+  accountsReady: false, // true once the initial getAccounts() call has resolved
+  setAccounts: (accounts) => {
+    // Every refresh of the account list is also the moment to notice that the selected
+    // account has been deleted. Without this the client stays pinned to a dead id forever,
+    // because localStorage restores it on every load. See utils/accountScope.js.
+    const previous = get().selectedAccountId;
+    const selectedAccountId = resolveSelectedAccount(accounts, previous);
+    const reselected = selectedAccountId !== previous;
+    if (reselected) {
+      // Mirror setSelectedAccount's persistence so the fallback survives a reload.
+      localStorage.setItem('mailflow_selected_account', '');
+      localStorage.setItem('mailflow_selected_folder', 'INBOX');
+    }
+    set(state => ({
+      accounts, accountsReady: true, selectedAccountId,
+      ...(reselected ? { selectedFolder: 'INBOX' } : {}),
+      folders: pruneFolders(state.folders, accounts),
+      unreadCounts: displayCountSnapshot(state.serverUnreadCounts, state.pendingCounts, accounts),
+    }));
+  },
+  updateAccount: (id, updates) => set(state => {
+    const accounts = state.accounts.map(a => a.id === id ? { ...a, ...updates } : a);
+    return { accounts, unreadCounts: displayCountSnapshot(state.serverUnreadCounts, state.pendingCounts, accounts) };
+  }),
+
+  // Navigation
+  selectedAccountId: localStorage.getItem('mailflow_selected_account') || null, // '' stored as null
+  selectedFolder: localStorage.getItem('mailflow_selected_folder') || 'INBOX',
+  messagesRefreshToken: 0, // incremented on every nav click so the effect always re-fires
+  setSelectedAccount: (accountId, folder = 'INBOX') => {
+    localStorage.setItem('mailflow_selected_account', accountId ?? '');
+    localStorage.setItem('mailflow_selected_folder', folder);
+    return set(state => {
+      // #221: auto-close a folder-scoped search when navigating to a different
+      // folder/account. A scoped search (a specific account with "Search all folders"
+      // off) targets the current folder, so its results are stale once you leave it;
+      // an all-folders search spans everything and is left intact. Clearing only
+      // searchQuery lets the search effect tear down the rest of the search state,
+      // exactly like the in-box clear (X) button does.
+      const navChanged = state.selectedAccountId !== accountId || state.selectedFolder !== folder;
+      const wasScopedSearch = !!state.selectedAccountId && !state.searchAllFolders && !!state.searchQuery.trim();
+      return {
+        selectedAccountId: accountId,
+        selectedFolder: folder,
+        selectedMessageId: null,
+        messages: [],
+        messagesOffset: 0,
+        hasMoreMessages: true,
+        messagesRefreshToken: state.messagesRefreshToken + 1,
+        replyDrafts: {}, replyDraftRevision: state.replyDraftRevision + 1,
+        expandedThreadId: null,
+        threadMessages: {},
+        showContacts: false,
+        ...(navChanged && wasScopedSearch ? { searchQuery: '' } : {}),
+      };
+    });
+  },
+
+
+  // Messages
+  messages: [],
+  // Dedupe by delivery on every raw list load: one email can arrive as two rows (a received copy
+  // plus its Sent twin, or an INBOX copy plus its label-folder copy) and must render once,
+  // matching isSelectedRow's identity model (#378). Copies in two different accounts are separate
+  // mail and both render (#476). appendMessages/restore dedupe on their own paths; this covers the
+  // initial/refresh/page loads that replace wholesale.
+  setMessages: (messages) => set({ messages: dedupeByIdentity(messages) }),
+  appendMessages: (newMessages) => set(state => {
+    // Merge by stable identity (Message-ID when present, else id): a same-id row is dropped so the
+    // existing copy keeps any optimistic local-only fields a refresh lost (unread_count, etc.),
+    // while a reindexed message (same Message-ID, new id after a purge+reinsert) replaces its stale
+    // row in place instead of appearing as a duplicate. See appendMessagesByIdentity.
+    const messages = appendMessagesByIdentity(state.messages, newMessages);
+    return messages === state.messages ? {} : { messages };
+  }),
+  updateMessage: (id, updates) => set(state => {
+    const apply = (m) => m.id === id ? { ...m, ...updates } : m;
+    const threadMessages = Object.fromEntries(
+      Object.entries(state.threadMessages).map(([tid, msgs]) => [tid, msgs.map(apply)])
+    );
+    // Resync the parent thread row's aggregate read state only when a sub-message was
+    // updated. Sub-messages live exclusively in threadMessages, not in the main list.
+    // Resyncing on direct thread-row updates would read stale sub-messages and revert
+    // keyboard mark-read and setMessagesReadState changes.
+    const inMainList = state.messages.some(m => m.id === id);
+    const messages = state.messages.map(m => {
+      const updated = apply(m);
+      if (inMainList) return updated;
+      const tid = m.thread_id || m.id;
+      const subs = threadMessages[tid];
+      if (!subs) return updated;
+      const unread_count = subs.filter(s => !s.is_read).length;
+      return { ...updated, unread_count, is_read: unread_count === 0 };
+    });
+    return { messages, searchResults: state.searchResults.map(apply), threadMessages };
+  }),
+  removeMessage: (id) => set(state => ({
+    messages: state.messages.filter(m => m.id !== id),
+    searchResults: state.searchResults.filter(m => m.id !== id),
+    selectedMessageId: state.selectedMessageId === id ? null : state.selectedMessageId,
+  })),
+  // Remove many messages in a single state update. Bulk triage (e.g. archiving ~40 rows)
+  // otherwise calls removeMessage once per id, firing one store update — and, in a
+  // non-virtualized list, one re-render — each, which stalls the UI. This collapses them
+  // into one filter pass and one update.
+  removeMessages: (ids) => set(state => {
+    const idSet = ids instanceof Set ? ids : new Set(ids);
+    if (idSet.size === 0) return {};
+    return {
+      messages: state.messages.filter(m => !idSet.has(m.id)),
+      searchResults: state.searchResults.filter(m => !idSet.has(m.id)),
+      selectedMessageId: idSet.has(state.selectedMessageId) ? null : state.selectedMessageId,
+    };
+  }),
+  restoreMessages: (msgs) => set(state => {
+    const list = Array.isArray(msgs) ? msgs : [msgs];
+    const sort = arr => [...arr].sort((a, b) => new Date(b.date) - new Date(a.date));
+    // Deduplicate against both the main list and searchResults by stable identity (Message-ID when
+    // present, else id): if the message is already present — including re-added by a network
+    // refresh under a regenerated id (matched via Message-ID) — skip it. The local copy carries the
+    // freshest optimistic state, so we prefer it over the server view. See missingByIdentity.
+    const missing = missingByIdentity(state.messages, list);
+    if (missing.length === 0 && !state.searchQuery.trim()) return {};
+    const missingFromSearch = missingByIdentity(state.searchResults, list);
+    return {
+      messages: missing.length ? sort([...state.messages, ...missing]) : state.messages,
+      searchResults: state.searchQuery.trim() && missingFromSearch.length
+        ? sort([...state.searchResults, ...missingFromSearch])
+        : state.searchResults,
+    };
+  }),
+  messagesOffset: 0,
+  setMessagesOffset: (offset) => set({ messagesOffset: offset }),
+  messagesTotal: 0,
+  setMessagesTotal: (total) => set({ messagesTotal: total }),
+  hasMoreMessages: true,
+  setHasMoreMessages: (v) => set({ hasMoreMessages: v }),
+
+  // Selected message
+  selectedMessageId: null,
+  lastViewedMessageId: null,
+  setSelectedMessage: (id) => set(id ? { selectedMessageId: id, lastViewedMessageId: id } : { selectedMessageId: null }),
+
+  // Server snapshots are retained separately from a bounded optimistic window.
+  serverUnreadCounts: { total: 0, byAccount: {}, snapshots: {} },
+  pendingCounts: {},
+  unreadCounts: { total: 0, byAccount: {}, snapshots: {}, complete: false },
+  setUnreadCounts: (counts) => set(state => {
+    if (state.isLocked) return {};
+    const server = mergeCountSnapshots(state.serverUnreadCounts, counts);
+    // Retire windows the server has now had a chance to observe, rather than waiting for the
+    // backstop to expire them: the timer alone reverted the badge ~1-2s before the replacement
+    // observation landed, which read as the count bouncing back on every read or move.
+    const pending = settleCountPending(state.pendingCounts, server);
+    if (!Object.keys(pending).length) { clearTimeout(pendingCountTimer); pendingCountTimer = null; }
+    return { serverUnreadCounts: server, pendingCounts: pending,
+      unreadCounts: displayCountSnapshot(server, pending, state.accounts) };
+  }),
+  adjustUnread: (accountId, delta) => {
+    set(state => {
+      if (state.isLocked) return {};
+      const displayed = displayCountSnapshot(state.serverUnreadCounts, state.pendingCounts, state.accounts);
+      const pending = adjustCountPending(state.pendingCounts, displayed, accountId, delta);
+      return { pendingCounts: pending,
+        unreadCounts: displayCountSnapshot(state.serverUnreadCounts, pending, state.accounts) };
+    });
+    // Do not reset this timer on subsequent clicks: continuous activity cannot freeze counts.
+    if (!pendingCountTimer) expirePendingCounts();
+  },
+  decrementUnread: (accountId, count = 1) => get().adjustUnread(accountId, -count),
+  incrementUnread: (accountId, count = 1) => get().adjustUnread(accountId, count),
+
+  // Folder badges always show observed server values. Row-level read/move optimism
+  // remains immediate; aggregate thread estimates must not overwrite these snapshots.
+  folders: {},
+  setFolders: (accountId, folders) => set(state => state.isLocked ? {} : ({
+    folders: { ...state.folders, [accountId]: mergeFolderSnapshots(state.folders[accountId], folders) }
+  })),
+
+  // UI state
+  sidebarCollapsed: localStorage.getItem('mailflow_sidebar_collapsed') === 'true',
+  toggleSidebar: () => set(state => {
+    const next = !state.sidebarCollapsed;
+    localStorage.setItem('mailflow_sidebar_collapsed', String(next));
+    return { sidebarCollapsed: next };
+  }),
+  sidebarWidth: (() => {
+    const n = parseInt(localStorage.getItem('mailflow_sidebar_width'));
+    return (n >= 160 && n <= 400) ? n : 240;
+  })(),
+  setSidebarWidth: (w) => {
+    localStorage.setItem('mailflow_sidebar_width', String(w));
+    set({ sidebarWidth: w });
+    schedulePrefSave({ sidebarWidth: String(w) });
+  },
+  isSidebarResizing: false,
+  setIsSidebarResizing: (v) => set({ isSidebarResizing: v }),
+  pageSize: parseInt(localStorage.getItem('mailflow_page_size')) || 50,
+  setPageSize: (size) => {
+    localStorage.setItem('mailflow_page_size', String(size));
+    set({ pageSize: size });
+    schedulePrefSave({ pageSize: String(size) });
+  },
+  scrollMode: localStorage.getItem('mailflow_scroll_mode') || 'infinite',
+  setScrollMode: (mode) => {
+    localStorage.setItem('mailflow_scroll_mode', mode);
+    set({ scrollMode: mode });
+    schedulePrefSave({ scrollMode: mode });
+  },
+  // When true, search spans all folders instead of the current one (per device).
+  searchAllFolders: localStorage.getItem('mailflow_search_all_folders') === '1',
+  setSearchAllFolders: (v) => {
+    if (v) localStorage.setItem('mailflow_search_all_folders', '1');
+    else localStorage.removeItem('mailflow_search_all_folders');
+    set({ searchAllFolders: v });
+  },
+  swipeActions: (() => {
+    try {
+      return JSON.parse(localStorage.getItem('mailflow_swipe_actions') || 'null') || { left: 'archive', right: 'markRead' };
+    } catch {
+      return { left: 'archive', right: 'markRead' };
+    }
+  })(),
+  setSwipeAction: (direction, action) => set(state => {
+    const next = { ...state.swipeActions, [direction]: action };
+    localStorage.setItem('mailflow_swipe_actions', JSON.stringify(next));
+    schedulePrefSave({ swipeActions: next });
+    return { swipeActions: next };
+  }),
+  syncInterval: parseInt(localStorage.getItem('mailflow_sync_interval')) || 60,
+  setSyncInterval: (seconds) => {
+    localStorage.setItem('mailflow_sync_interval', String(seconds));
+    set({ syncInterval: seconds });
+    schedulePrefSave({ syncInterval: String(seconds) });
+  },
+  // Folder-structure sync cadence in seconds; 0 = never. Explicit Number.isFinite
+  // check because 0 is a valid stored value that `|| default` would clobber.
+  folderSyncInterval: (() => {
+    const v = parseInt(localStorage.getItem('mailflow_folder_sync_interval'));
+    return Number.isFinite(v) ? v : 1800;
+  })(),
+  setFolderSyncInterval: (seconds) => {
+    localStorage.setItem('mailflow_folder_sync_interval', String(seconds));
+    set({ folderSyncInterval: seconds });
+    schedulePrefSave({ folderSyncInterval: String(seconds) });
+  },
+  notificationSound: localStorage.getItem('mailflow_notification_sound') || 'tritone',
+  setNotificationSound: (sound) => {
+    localStorage.setItem('mailflow_notification_sound', sound);
+    set({ notificationSound: sound });
+    schedulePrefSave({ notificationSound: sound });
+  },
+  customSoundDataUrl: localStorage.getItem('mailflow_custom_sound') || null,
+  setCustomSoundDataUrl: (dataUrl) => {
+    if (dataUrl) {
+      localStorage.setItem('mailflow_custom_sound', dataUrl);
+    } else {
+      localStorage.removeItem('mailflow_custom_sound');
+    }
+    set({ customSoundDataUrl: dataUrl });
+  },
+  replyDrafts: {},
+  replyDraftRevision: 0,
+  invalidateReplyDrafts: () => set(state => ({ replyDrafts: {}, replyDraftRevision: state.replyDraftRevision + 1 })),
+  setReplyDraftStatus: (id, status, source, revision) => set(state => {
+    if (revision !== undefined && revision !== state.replyDraftRevision) return {};
+    if (source === 'cached' && state.replyDrafts[id]?.source === 'live') return {};
+    return { replyDrafts: { ...state.replyDrafts, [id]: { ...status, source } } };
+  }),
+  autoOpenReplyDrafts: localStorage.getItem('mailflow_auto_open_reply_drafts') === 'true',
+  setAutoOpenReplyDrafts: value => {
+    localStorage.setItem('mailflow_auto_open_reply_drafts', String(Boolean(value)));
+    set({ autoOpenReplyDrafts: Boolean(value) });
+    schedulePrefSave({ autoOpenReplyDrafts: Boolean(value) });
+  },
+  composing: false,
+  composeData: null,
+  composeSession: 0,
+  prepareComposeSwitch: null,
+  setPrepareComposeSwitch: prepare => set({ prepareComposeSwitch: prepare }),
+  updateComposePersistedKey: (session, persistedKey) => set(state =>
+    state.composing && state.composeSession === session
+      ? { composeData: { ...state.composeData, persistedKey } } : {}),
+  openCompose: (data = null, { preparedSession } = {}) => {
+    const initial = get();
+    if (initial.composing && data?.persistedKey && data.persistedKey === initial.composeData?.persistedKey) return true;
+    const replace = () => {
+      set(state => ({ composing: true, composeSession: state.composeSession + 1, composeData: data, prepareComposeSwitch: null }));
+      return true;
+    };
+    if (preparedSession !== undefined && preparedSession !== initial.composeSession) return false;
+    // Reply-draft opening already saved this exact editor and revalidated its target.
+    if (!initial.composing || preparedSession === initial.composeSession) return replace();
+    // Every ordinary Compose/Reply/draft-list entry point shares this guard. A
+    // composer still mounting cannot yet prove that its content is safe to replace.
+    if (!initial.prepareComposeSwitch) return false;
+    let ownerChanged = false;
+    const unsubscribe = useStore.subscribe(state => { if (state.user?.id !== initial.user?.id) ownerChanged = true; });
+    return (async () => {
+      try {
+        if (!(await initial.prepareComposeSwitch())) return false;
+        const state = get();
+        if (ownerChanged || state.user?.id !== initial.user?.id || !state.composing
+          || state.composeSession !== initial.composeSession || state.prepareComposeSwitch !== initial.prepareComposeSwitch) return false;
+        return replace();
+      } catch { return false; }
+      finally { unsubscribe(); }
+    })();
+  },
+  closeCompose: () => set({ composing: false, composeData: null, prepareComposeSwitch: null }),
+
+  // Detached message windows (#219): floating, draggable/resizable in-app windows
+  // that each show one message via a MessagePane instance. Desktop-only; mounted by
+  // WindowLayer. `_winSeq` is a monotonic counter serving as both a unique id source
+  // and the z-order stamp (higher = on top / more recently focused).
+  messageWindows: [],
+  _winSeq: 0,
+  openMessageWindow: (messageId) => set(state => {
+    const seq = state._winSeq + 1;
+    // Re-opening a message that already has a window focuses + un-minimizes it
+    // rather than spawning a duplicate.
+    if (state.messageWindows.some(w => w.messageId === messageId)) {
+      return {
+        _winSeq: seq,
+        messageWindows: state.messageWindows.map(w =>
+          w.messageId === messageId ? { ...w, minimized: false, z: seq } : w),
+      };
+    }
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+    const w = Math.min(660, Math.max(360, vw - 80));
+    const h = Math.min(740, Math.max(280, vh - 80));
+    // Cascade each new window down-right so they don't stack exactly on top.
+    const cascade = (state.messageWindows.length % 6) * 28;
+    const x = Math.max(12, Math.min(vw - w - 12, Math.round((vw - w) / 2) - 80 + cascade));
+    const y = Math.max(12, Math.min(vh - h - 12, 72 + cascade));
+    return {
+      _winSeq: seq,
+      messageWindows: [...state.messageWindows, { winId: `mw-${seq}`, messageId, x, y, w, h, z: seq, minimized: false }],
+    };
+  }),
+  closeMessageWindow: (winId) => set(state => ({
+    messageWindows: state.messageWindows.filter(w => w.winId !== winId),
+  })),
+  focusMessageWindow: (winId) => set(state => {
+    const seq = state._winSeq + 1;
+    return {
+      _winSeq: seq,
+      messageWindows: state.messageWindows.map(w => w.winId === winId ? { ...w, z: seq } : w),
+    };
+  }),
+  setMessageWindowMinimized: (winId, minimized) => set(state => {
+    const seq = state._winSeq + 1;
+    return {
+      _winSeq: seq,
+      // Restoring (minimized=false) also brings the window to the front.
+      messageWindows: state.messageWindows.map(w =>
+        w.winId === winId ? { ...w, minimized, z: minimized ? w.z : seq } : w),
+    };
+  }),
+  updateMessageWindowRect: (winId, rect) => set(state => ({
+    messageWindows: state.messageWindows.map(w => w.winId === winId ? { ...w, ...rect } : w),
+  })),
+  closeAllMessageWindows: () => set({ messageWindows: [] }),
+  searchQuery: '',
+  setSearchQuery: (q) => set(state => q === state.searchQuery ? {} : { searchQuery: q,
+    replyDrafts: {}, replyDraftRevision: state.replyDraftRevision + 1 }),
+  isSearching: false,
+  setIsSearching: (v) => set({ isSearching: v }),
+  searchResults: [],
+  setSearchResults: (r) => set({ searchResults: r }),
+
+  // Loading
+  loadingMessages: false,
+  setLoadingMessages: (v) => set({ loadingMessages: v }),
+
+  // Notifications
+  notifications: [],
+  addNotification: (n) => set(state => ({
+    notifications: [{ ...n, id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}` }, ...state.notifications].slice(0, 5)
+  })),
+  dismissUndoNotifications: (matches = () => true) => set(state => ({
+    notifications: state.notifications.filter(n => typeof n.onUndo !== 'function' || !matches(n)),
+  })),
+  removeNotification: (id) => set(state => ({
+    notifications: state.notifications.filter(n => n.id !== id)
+  })),
+
+  // Admin panel
+  showAdmin: false,
+  adminTab: 'accounts', // 'accounts' | 'appearance' | 'integrations' | 'users'
+  setShowAdmin: (v) => set({ showAdmin: v }),
+  setAdminTab: (t) => set({ adminTab: t }),
+
+  // Contacts view
+  showContacts: false,
+  setShowContacts: (v) => set({ showContacts: v }),
+  rulesPreFill: null, // { fromEmail, fromName, subject } — transient, set by context menu
+  setRulesPreFill: (v) => set({ rulesPreFill: v }),
+
+  backfillProgress: {}, // { [accountId]: { synced: N, total: N } | null } — transient
+  setBackfillProgress: (accountId, progress) => set(state => ({
+    backfillProgress: { ...state.backfillProgress, [accountId]: progress },
+  })),
+
+  // Mobile navigation
+  mobileSidebarOpen: false,
+  setMobileSidebarOpen: (v) => set({ mobileSidebarOpen: v }),
+
+  // Language
+  language: initialLanguage,
+  setLanguage: (lng) => {
+    localStorage.setItem('mailflow_language', lng);
+    set({ language: lng });
+    i18n.changeLanguage(lng);
+    schedulePrefSave({ language: lng });
+  },
+
+  // How conversations are shown: 'off', 'list' (threads expand inline in the list) or
+  // 'pane' (a selected row opens the whole conversation in the reading area).
+  //
+  // threadedView is kept as a derived flag rather than a second source of truth: it is what
+  // the list-loading code already asks for when deciding to request threaded results, and
+  // both grouping modes want that. Deriving it means none of those call sites change, and an
+  // install that only ever knew the old boolean keeps working (resolveConversationMode
+  // migrates it).
+  conversationMode: resolveConversationMode({
+    conversationMode: localStorage.getItem('mailflow_conversation_mode'),
+    threadedView: localStorage.getItem('mailflow_threaded_view') === 'true',
+  }),
+  threadedView: groupsMessageList(resolveConversationMode({
+    conversationMode: localStorage.getItem('mailflow_conversation_mode'),
+    threadedView: localStorage.getItem('mailflow_threaded_view') === 'true',
+  })),
+  setConversationMode: (mode) => {
+    const next = conversationModeTransition(mode, get().conversationMode);
+    if (!next) return;
+    localStorage.setItem('mailflow_conversation_mode', next.conversationMode);
+    localStorage.setItem('mailflow_threaded_view', String(groupsMessageList(next.conversationMode)));
+    set(state => ({ ...next, threadedView: groupsMessageList(next.conversationMode),
+      replyDrafts: {}, replyDraftRevision: state.replyDraftRevision + 1 }));
+    schedulePrefSave({ conversationMode: next.conversationMode, threadedView: groupsMessageList(next.conversationMode) });
+  },
+  setThreadedView: (val) => {
+    // Retained for callers that still speak the old boolean.
+    get().setConversationMode(val ? 'list' : 'off');
+  },
+
+  // Compose format
+  plaintextEmail: localStorage.getItem('mailflow_plaintext_email') === 'true',
+  setPlaintextEmail: (val) => {
+    localStorage.setItem('mailflow_plaintext_email', String(val));
+    set({ plaintextEmail: val });
+    schedulePrefSave({ plaintextEmail: val });
+  },
+
+  // Default sender for composes with no account context, i.e. the unified inbox (#417).
+  // Holds a From selector value ('account:<id>' or 'alias:<aliasId>:<accountId>') so an
+  // alias can be the default too. '' means "no preference", which keeps the previous
+  // last-used-account behaviour. Validated at use, since accounts and aliases outlive it.
+  defaultSender: localStorage.getItem('mailflow_default_sender') || '',
+  setDefaultSender: (val) => {
+    const clean = typeof val === 'string' ? val : '';
+    localStorage.setItem('mailflow_default_sender', clean);
+    set({ defaultSender: clean });
+    schedulePrefSave({ defaultSender: clean });
+  },
+
+  // Message list quick actions
+  hoverQuickActions: localStorage.getItem('mailflow_hover_quick_actions') !== 'false',
+  setHoverQuickActions: (val) => {
+    localStorage.setItem('mailflow_hover_quick_actions', String(val));
+    set({ hoverQuickActions: val });
+    schedulePrefSave({ hoverQuickActions: val });
+  },
+
+  // #440: WHICH quick actions the hover cluster shows. Stored as a subset of
+  // HOVER_ACTION_KEYS (RowHoverActions.jsx); order is always canonical, so the setter
+  // normalizes by filtering the canonical list — customization is membership, not order.
+  // Unknown keys from an older or edited pref are dropped on read.
+  hoverActionSet: (() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('mailflow_hover_action_set') || 'null');
+      if (Array.isArray(saved)) return sanitizeHoverActionSet(saved);
+    } catch { /* corrupted pref — fall back to the default cluster */ }
+    return [...DEFAULT_HOVER_ACTIONS];
+  })(),
+  setHoverActionSet: (keys) => {
+    const val = sanitizeHoverActionSet(keys);
+    localStorage.setItem('mailflow_hover_action_set', JSON.stringify(val));
+    set({ hoverActionSet: val });
+    schedulePrefSave({ hoverActionSet: val });
+  },
+
+  // Show sender avatars in the mobile message list (off by default — they cost row width
+  // on a narrow screen; opt-in for users who prefer the scannability). Desktop always shows them.
+  showMobileAvatars: localStorage.getItem('mailflow_show_mobile_avatars') === 'true',
+  setShowMobileAvatars: (val) => {
+    localStorage.setItem('mailflow_show_mobile_avatars', String(val));
+    set({ showMobileAvatars: val });
+    schedulePrefSave({ showMobileAvatars: val });
+  },
+
+  // Fetch sender avatars from Gravatar (off by default — opt-in third-party lookup, proxied
+  // through the backend so the user's IP is never exposed). Falls back to initials on a miss.
+  gravatarAvatars: localStorage.getItem('mailflow_gravatar_avatars') === 'true',
+  setGravatarAvatars: (val) => {
+    localStorage.setItem('mailflow_gravatar_avatars', String(val));
+    set({ gravatarAvatars: val });
+    schedulePrefSave({ gravatarAvatars: val });
+  },
+
+  // Show message preview snippets in the message list (on by default).
+  showMessagePreviews: localStorage.getItem('mailflow_show_message_previews') !== 'false',
+  setShowMessagePreviews: (val) => {
+    localStorage.setItem('mailflow_show_message_previews', String(val));
+    set({ showMessagePreviews: val });
+    schedulePrefSave({ showMessagePreviews: val });
+  },
+
+  replyDefault: localStorage.getItem('mailflow_reply_default') || 'reply',
+  setReplyDefault: (val) => {
+    localStorage.setItem('mailflow_reply_default', val);
+    set({ replyDefault: val });
+    schedulePrefSave({ replyDefault: val });
+  },
+
+  markReadBehavior: localStorage.getItem('mailflow_mark_read_behavior') || 'immediate',
+  setMarkReadBehavior: (val) => {
+    localStorage.setItem('mailflow_mark_read_behavior', val);
+    set({ markReadBehavior: val });
+    schedulePrefSave({ markReadBehavior: val });
+  },
+  markReadDelay: parseInt(localStorage.getItem('mailflow_mark_read_delay') || '1') || 1,
+  setMarkReadDelay: (val) => {
+    const n = Math.max(1, Math.min(10, parseInt(val) || 1));
+    localStorage.setItem('mailflow_mark_read_delay', String(n));
+    set({ markReadDelay: n });
+    schedulePrefSave({ markReadDelay: n });
+  },
+
+  // Thread expansion cache (not persisted — reset on navigation)
+  expandedThreadId: null,
+  setExpandedThreadId: (id) => set({ expandedThreadId: id }),
+  threadMessages: {},
+  setThreadMessages: (threadId, msgs) => set(state => ({
+    threadMessages: { ...state.threadMessages, [threadId]: msgs },
+  })),
+  clearThreadMessages: (threadId) => set(state => ({
+    threadMessages: removeThreadCacheEntry(state.threadMessages, threadId),
+  })),
+  loadingThread: null,
+  setLoadingThread: (id) => set({ loadingThread: id }),
+
+  // Theme
+  theme: localStorage.getItem('mailflow_theme') || getInitialTheme(),
+  setTheme: (theme) => {
+    localStorage.setItem('mailflow_theme', theme);
+    set({ theme });
+    applyTheme(theme); // keep CSS vars + favicon in sync
+    // If a retro font was left as the saved choice, a non-retro theme must not keep it —
+    // normalise the stored choice so it can't "stick" (and the font picker stays honest).
+    if (!THEME_FONT[theme] && isRetroFont(get().fontSet)) {
+      localStorage.setItem('mailflow_font', 'default');
+      set({ fontSet: 'default' });
+      schedulePrefSave({ font: 'default' });
+    }
+    // Retro themes bring their own font; other themes fall back to the saved choice.
+    applyFontSet(effectiveFontSet(theme, get().fontSet));
+    schedulePrefSave({ theme });
+  },
+
+  // Font
+  fontSet: localStorage.getItem('mailflow_font') || 'default',
+  setFontSet: (fontSet) => {
+    localStorage.setItem('mailflow_font', fontSet);
+    set({ fontSet });
+    // A retro theme's paired font still wins over an explicit pick while it's active.
+    applyFontSet(effectiveFontSet(get().theme, fontSet));
+    schedulePrefSave({ font: fontSet });
+  },
+
+  fontSize: parseInt(localStorage.getItem('mailflow_font_size')) || 100,
+  setFontSize: (pct) => {
+    localStorage.setItem('mailflow_font_size', String(pct));
+    set({ fontSize: pct });
+    applyFontSize(pct);
+    schedulePrefSave({ fontSize: String(pct) });
+  },
+
+  showAppBadge: localStorage.getItem('mailflow_app_badge') !== 'false',
+  setShowAppBadge: (val) => {
+    localStorage.setItem('mailflow_app_badge', String(val));
+    set({ showAppBadge: val });
+    schedulePrefSave({ showAppBadge: val });
+  },
+
+  showFaviconBadge: localStorage.getItem('mailflow_favicon_badge') !== 'false',
+  setShowFaviconBadge: (val) => {
+    localStorage.setItem('mailflow_favicon_badge', String(val));
+    set({ showFaviconBadge: val });
+    schedulePrefSave({ showFaviconBadge: val });
+  },
+
+  categorizationEnabled: false,
+  setCategorizationEnabled: (val) => {
+    set({ categorizationEnabled: val });
+    schedulePrefSave({ categorizationEnabled: val });
+  },
+
+  // Unread counts per category for the tab bar badges { primary: N, newsletter: N, ... }
+  categoryCounts: {},
+  setCategoryCounts: (counts) => set({ categoryCounts: counts }),
+  adjustCategoryCount: (category, delta) => set(state => {
+    const key = category || 'primary';
+    const current = state.categoryCounts[key] || 0;
+    return { categoryCounts: { ...state.categoryCounts, [key]: Math.max(0, current + delta) } };
+  }),
+
+  // ── Right-sidebar layout ────────────────────────────────────────────────────
+  // Independent column width (own var + handle, not --list-width).
+  rightSidebarWidth: clampRightSidebarWidth(localStorage.getItem('mailflow_right_sidebar_width')),
+  setRightSidebarWidth: (w) => {
+    const clamped = clampRightSidebarWidth(w);
+    localStorage.setItem('mailflow_right_sidebar_width', String(clamped));
+    set({ rightSidebarWidth: clamped });
+    schedulePrefSave({ rightSidebarWidth: clamped });
+  },
+  isRightSidebarResizing: false,
+  setIsRightSidebarResizing: (v) => set({ isRightSidebarResizing: v }),
+
+  rightSidebarHidden: localStorage.getItem('mailflow_right_sidebar_hidden') === 'true',
+  toggleRightSidebarHidden: () => set(state => {
+    const next = !state.rightSidebarHidden;
+    localStorage.setItem('mailflow_right_sidebar_hidden', String(next));
+    schedulePrefSave({ rightSidebarHidden: next });
+    return { rightSidebarHidden: next };
+  }),
+
+  // ── GTD content + tabs ──────────────────────────────────────────────────────
+  // Per-section collapse state (section key -> bool). Someday collapsed by default.
+  gtdCollapsedSections: readGtdCollapsedSections(),
+  toggleGtdSection: (section) => set(state => {
+    const next = { ...state.gtdCollapsedSections, [section]: !state.gtdCollapsedSections[section] };
+    localStorage.setItem('mailflow_gtd_collapsed_sections', JSON.stringify(next));
+    schedulePrefSave({ gtdCollapsedSections: next });
+    return { gtdCollapsedSections: next };
+  }),
+
+  // Active GTD browse tab in the message-list pill strip (null = normal list).
+  activeGtdTab: null,
+  setActiveGtdTab: (tab) => set({ activeGtdTab: tab }),
+
+  // Sections data feeding both the rail and the tab list. null before first load.
+  gtdSections: null,
+  fetchGtdSections: async () => {
+    const seq = ++_gtdSectionsSeq;
+    const accountId = get().selectedAccountId || undefined;
+    try {
+      const data = await api.getGtdSections({ accountId, limit: 50 });
+      if (seq !== _gtdSectionsSeq) return; // superseded by a newer fetch
+      set({ gtdSections: applyGtdRemovalGuard(data.sections || {}) });
+    } catch {
+      // Best-effort; scheduleGtdSectionsFetch/the next context change will retry.
+    }
+  },
+  // Debounced refetch — used by the WS gtd_sections_updated handler and after a
+  // classify so the rail converges without waiting on (or racing) the socket.
+  scheduleGtdSectionsFetch: () => {
+    clearTimeout(_gtdFetchTimer);
+    _gtdFetchTimer = setTimeout(() => { get().fetchGtdSections(); }, 400);
+  },
+  // Optimistically drop a thread's head from the given GTD state sections after a
+  // "done" action so the rail row disappears instantly; the gtd_sections_updated
+  // refetch reconciles the authoritative counts. identity is message_id||id; states
+  // are the backend section keys whose labels were removed (todo/watch/delegated/…).
+  // Delegates to a pure helper (unit-tested in gtd.test.js) that also keeps the deduped
+  // Waiting rollup in step so the Waiting badge is correct instantly.
+  removeGtdThread: (identity, states) => {
+    let snapshot = null;
+    set(state => {
+      snapshot = snapshotGtdThreadRemoval(state.gtdSections, identity, states);
+      const next = removeGtdThreadFromSections(state.gtdSections, identity, states);
+      return next === state.gtdSections ? {} : { gtdSections: next };
+    });
+    return snapshot;
+  },
+  restoreGtdThread: (snapshot) => set(state => {
+    const next = restoreGtdThreadRemoval(state.gtdSections, snapshot);
+    return next === state.gtdSections ? {} : { gtdSections: next };
+  }),
+  // Optimistically flip a section thread's read flag so a rail row's bold/normal styling
+  // updates instantly on a mark-read/unread from the rail; the WS/gtd refetch reconciles.
+  // identity is message_id||id and matches across every state a thread is labelled with
+  // (a merged Waiting row lives in both watch and delegated), keeping them in sync — and
+  // the deduped Waiting rollup's unread with them (pure helper, unit-tested in gtd.test.js).
+  markGtdThreadRead: (identity, isRead) => set(state => {
+    const next = setGtdThreadReadInSections(state.gtdSections, identity, isRead);
+    return next === state.gtdSections ? {} : { gtdSections: next };
+  }),
+  // Optimistically flip a section thread's star so a rail row's star fills/empties instantly
+  // on a toggle; the WS/gtd refetch reconciles. identity is message_id||id and matches across
+  // every state a thread is labelled with (a merged Waiting row lives in both watch and
+  // delegated), keeping them in sync. Star does not affect the unread rollup.
+  markGtdThreadStarred: (identity, isStarred) => set(state => {
+    const cur = state.gtdSections;
+    if (!cur || identity == null) return {};
+    const next = { ...cur };
+    let changed = false;
+    for (const [key, sec] of Object.entries(cur)) {
+      if (!sec || !Array.isArray(sec.threads)) continue;
+      let touched = false;
+      const threads = sec.threads.map(th => {
+        if ((th.message_id || th.id) !== identity || !!th.is_starred === isStarred) return th;
+        touched = true;
+        return { ...th, is_starred: isStarred };
+      });
+      if (!touched) continue;
+      changed = true;
+      next[key] = { ...sec, threads };
+    }
+    return changed ? { gtdSections: next } : {};
+  }),
+
+  // Which cached imported pet renders at inbox-zero (null = the built-in SVG dog).
+  // A flat user preference; the asset bytes live server-side, keyed by this slug.
+  gtdPetSlug: null,
+  setGtdPetSlug: (slug) => {
+    const value = slug || null;
+    set({ gtdPetSlug: value });
+    // '' is the explicit "clear" sentinel the prefs allow-list understands.
+    api.savePreferences({ gtdPetSlug: value || '' }).catch(() => {});
+  },
+
+  // Layout
+  layout: (() => {
+    const raw = localStorage.getItem('mailflow_layout');
+    const clean = normalizeLayout(raw);
+    // Self-heal a stale/removed preset so it can never reach a consumer (#207).
+    if (raw && raw !== clean) localStorage.setItem('mailflow_layout', clean);
+    return clean;
+  })(),
+  setLayout: (layout) => {
+    const clean = normalizeLayout(layout);
+    localStorage.setItem('mailflow_layout', clean);
+    localStorage.removeItem('mailflow_list_width');
+    set({ layout: clean });
+    applyLayout(clean);
+    schedulePrefSave({ layout: clean });
+  },
+
+  // Image privacy
+  blockRemoteImages: true,
+  imageWhitelist: { addresses: [], domains: [] },
+  senderFaviconsLoaded: false,
+  senderFavicons: false,
+  senderFaviconsSaving: false,
+  // Monotonic counter bumped on every toggle. loadPreferences captures it before
+  // its GET so a stale hydration response can't clobber a toggle the user made
+  // while the fetch was in flight. Never reset — the user-id guard covers account
+  // switches, and monotonicity avoids ABA.
+  senderFaviconsEpoch: 0,
+  setSenderFavicons: async (enabled) => {
+    if (get().senderFaviconsSaving) return;
+    const userId = get().user?.id;
+    set(state => ({ senderFaviconsSaving: true, senderFaviconsEpoch: state.senderFaviconsEpoch + 1 }));
+    if (!enabled) {
+      set({ senderFavicons: false });
+      try { await api.savePreferences({ senderFavicons: false }); }
+      finally {
+        if (get().user?.id === userId) set({ senderFaviconsSaving: false });
+      }
+      return;
+    }
+    try {
+      await api.savePreferences({ senderFavicons: true });
+      if (get().user?.id === userId) {
+        set({ senderFaviconsLoaded: true, senderFavicons: true });
+      }
+    } finally {
+      if (get().user?.id === userId) set({ senderFaviconsSaving: false });
+    }
+  },
+  setBlockRemoteImages: (val) => {
+    set({ blockRemoteImages: val });
+    return api.savePreferences({ blockRemoteImages: val });
+  },
+  setImageWhitelist: (whitelist) => {
+    const prev = get().imageWhitelist;
+    set({ imageWhitelist: whitelist });
+    return api.savePreferences({ imageWhitelist: whitelist }).catch(err => {
+      set({ imageWhitelist: prev });
+      throw err;
+    });
+  },
+  addToImageWhitelist: ({ type, value }) => {
+    const prev = get().imageWhitelist;
+    const key = type === 'address' ? 'addresses' : 'domains';
+    const normalized = value.toLowerCase();
+    set({
+      imageWhitelist: {
+        ...prev,
+        [key]: [...new Set([...(prev[key] || []), normalized])],
+      },
+    });
+    return api.addToImageWhitelist({ type, value: normalized }).catch(err => {
+      set({ imageWhitelist: prev });
+      throw err;
+    });
+  },
+
+  // Keyboard shortcuts — stores only user overrides (action → key).
+  // Merged with defaults at use-time via getEffectiveShortcuts().
+  shortcuts: {},
+  setShortcuts: (overrides) => {
+    set({ shortcuts: overrides });
+    return api.savePreferences({ shortcuts: overrides }).catch(() => {});
+  },
+
+  // User-defined AI actions (#202), synced across devices. Each: { id, label, prompt }.
+  // null = not yet loaded; loadPreferences seeds defaults on first run.
+  aiActions: null,
+  setAiActions: (actions) => {
+    set({ aiActions: actions });
+    return api.savePreferences({ aiActions: actions }).catch(() => {});
+  },
+
+  // Hidden folders — { [accountId]: [path, ...] }
+  hiddenFolders: {},
+  setHiddenFolders: (hf) => {
+    set({ hiddenFolders: hf });
+    return api.savePreferences({ hiddenFolders: hf }).catch(() => {});
+  },
+
+  // Custom per-account folder display order — { [accountId]: [path, ...] }
+  folderOrder: readFolderOrder(),
+  setFolderOrder: (accountId, paths) => {
+    const next = mergeFolderOrder(get().folderOrder, accountId, paths);
+    set({ folderOrder: next });
+    schedulePrefSave({ folderOrder: next });
+  },
+
+  // Sidebar tree state — persisted so the tree looks the same after reload/re-login
+  expandedAccounts: (() => {
+    try { return JSON.parse(localStorage.getItem('mailflow_expanded_accounts') || '{}'); }
+    catch { return {}; }
+  })(),
+  setExpandedAccounts: (updater) => {
+    const next = typeof updater === 'function' ? updater(get().expandedAccounts) : updater;
+    localStorage.setItem('mailflow_expanded_accounts', JSON.stringify(next));
+    set({ expandedAccounts: next });
+    schedulePrefSave({ expandedAccounts: next });
+  },
+
+  // collapsedFolders stored as array of "accountId:path" keys (Set can't be JSON-serialised)
+  collapsedFolders: (() => {
+    try { return JSON.parse(localStorage.getItem('mailflow_collapsed_folders') || '[]'); }
+    catch { return []; }
+  })(),
+  toggleCollapsedFolder: (accountId, path) => {
+    const key = `${accountId}:${path}`;
+    const prev = get().collapsedFolders;
+    const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key];
+    localStorage.setItem('mailflow_collapsed_folders', JSON.stringify(next));
+    set({ collapsedFolders: next });
+    schedulePrefSave({ collapsedFolders: next });
+  },
+
+  // Favorite folders — [{ accountId, path }, ...] ordered by insertion
+  favoriteFolders: (() => {
+    try { return JSON.parse(localStorage.getItem('mailflow_favorite_folders') || '[]'); }
+    catch { return []; }
+  })(),
+  addFavoriteFolder: ({ accountId, path }) => {
+    const prev = get().favoriteFolders;
+    if (prev.some(f => f.accountId === accountId && f.path === path)) return;
+    const next = [...prev, { accountId, path }];
+    localStorage.setItem('mailflow_favorite_folders', JSON.stringify(next));
+    set({ favoriteFolders: next });
+    schedulePrefSave({ favoriteFolders: next });
+  },
+  removeFavoriteFolder: ({ accountId, path }) => {
+    const next = get().favoriteFolders.filter(f => !(f.accountId === accountId && f.path === path));
+    localStorage.setItem('mailflow_favorite_folders', JSON.stringify(next));
+    set({ favoriteFolders: next });
+    schedulePrefSave({ favoriteFolders: next });
+  },
+  renameFavoriteFolder: ({ accountId, path, label }) => {
+    const next = get().favoriteFolders.map(f => {
+      if (f.accountId !== accountId || f.path !== path) return f;
+      // eslint-disable-next-line no-unused-vars
+      const { label: _old, ...base } = f;
+      return label ? { ...base, label } : base;
+    });
+    localStorage.setItem('mailflow_favorite_folders', JSON.stringify(next));
+    set({ favoriteFolders: next });
+    schedulePrefSave({ favoriteFolders: next });
+  },
+  reorderFavoriteFolders: (next) => {
+    localStorage.setItem('mailflow_favorite_folders', JSON.stringify(next));
+    set({ favoriteFolders: next });
+    schedulePrefSave({ favoriteFolders: next });
+  },
+
+  // Recent move-to folders — [{ accountId, path }, ...] most-recent first, capped at 5
+  recentFolders: (() => {
+    try { return JSON.parse(localStorage.getItem('mailflow_recent_folders') || '[]'); }
+    catch { return []; }
+  })(),
+  recordRecentFolder: ({ accountId, path }) => {
+    const prev = get().recentFolders;
+    const deduped = prev.filter(f => !(f.accountId === accountId && f.path === path));
+    const next = [{ accountId, path }, ...deduped].slice(0, 5);
+    localStorage.setItem('mailflow_recent_folders', JSON.stringify(next));
+    set({ recentFolders: next });
+    schedulePrefSave({ recentFolders: next });
+  },
+
+  // Fetch server preferences and apply them — call after any successful login.
+  // Sets localStorage so subsequent page loads apply the right values instantly.
+  loadPreferences: async () => {
+    const userId = get().user?.id;
+    const faviconEpoch = get().senderFaviconsEpoch;
+    try {
+      const prefs = await api.getPreferences();
+      if (get().user?.id !== userId) return;
+      // Per-user plugin activation. Absent = nothing activated (new users start with GTD off);
+      // existing GTD users were grandfathered into ['gtd'] by migration 0042.
+      set({ enabledPlugins: Array.isArray(prefs.enabledPlugins) ? prefs.enabledPlugins : [] });
+      if (prefs.theme) {
+        localStorage.setItem('mailflow_theme', prefs.theme);
+        set({ theme: prefs.theme });
+        applyTheme(prefs.theme);
+      }
+      if (prefs.font) {
+        localStorage.setItem('mailflow_font', prefs.font);
+        set({ fontSet: prefs.font });
+      }
+      // Apply the effective font once theme + font are both known, so a retro theme's
+      // paired font overrides the saved font on load.
+      applyFontSet(effectiveFontSet(get().theme, get().fontSet));
+      if (prefs.fontSize) {
+        const n = parseInt(prefs.fontSize) || 100;
+        localStorage.setItem('mailflow_font_size', String(n));
+        set({ fontSize: n });
+        applyFontSize(n);
+      }
+      if (prefs.layout) {
+        const clean = normalizeLayout(prefs.layout);
+        const prevLayout = get().layout;
+        localStorage.setItem('mailflow_layout', clean);
+        set({ layout: clean });
+        if (clean !== prevLayout) localStorage.removeItem('mailflow_list_width');
+        const savedListWidth = clean !== prevLayout
+          ? undefined
+          : (Number(localStorage.getItem('mailflow_list_width')) || undefined);
+        applyLayout(clean, savedListWidth);
+      }
+      if (typeof prefs.autoOpenReplyDrafts === 'boolean') {
+        localStorage.setItem('mailflow_auto_open_reply_drafts', String(prefs.autoOpenReplyDrafts));
+        set({ autoOpenReplyDrafts: prefs.autoOpenReplyDrafts });
+      }
+      if (prefs.notificationSound) {
+        localStorage.setItem('mailflow_notification_sound', prefs.notificationSound);
+        set({ notificationSound: prefs.notificationSound });
+      }
+      if (prefs.pageSize) {
+        const n = parseInt(prefs.pageSize) || 50;
+        localStorage.setItem('mailflow_page_size', String(n));
+        set({ pageSize: n });
+      }
+      if (prefs.scrollMode) {
+        localStorage.setItem('mailflow_scroll_mode', prefs.scrollMode);
+        set({ scrollMode: prefs.scrollMode });
+      }
+      if (prefs.swipeActions) {
+        const swipeActions = {
+          left: prefs.swipeActions.left || 'archive',
+          right: prefs.swipeActions.right || 'markRead',
+        };
+        localStorage.setItem('mailflow_swipe_actions', JSON.stringify(swipeActions));
+        set({ swipeActions });
+      }
+      if (prefs.syncInterval) {
+        const n = parseInt(prefs.syncInterval) || 60;
+        localStorage.setItem('mailflow_sync_interval', String(n));
+        set({ syncInterval: n });
+      }
+      if (prefs.folderSyncInterval != null) {
+        const n = parseInt(prefs.folderSyncInterval);
+        if ([0, 900, 1800, 3600].includes(n)) {
+          localStorage.setItem('mailflow_folder_sync_interval', String(n));
+          set({ folderSyncInterval: n });
+        }
+      }
+      // blockRemoteImages: explicit false disables blocking; anything else keeps the default (true)
+      if (prefs.blockRemoteImages === false) set({ blockRemoteImages: false });
+      else if (prefs.blockRemoteImages === true) set({ blockRemoteImages: true });
+      if (prefs.autoLockMinutes != null) {
+        const n = Number(prefs.autoLockMinutes);
+        set({ autoLockMinutes: [0, 1, 5, 15, 30].includes(n) ? n : 0 });
+      }
+      if (prefs.imageWhitelist) set({ imageWhitelist: prefs.imageWhitelist });
+      // Hydration is done, but if the user toggled while this GET was in flight
+      // (epoch bumped), the toggle owns senderFavicons — only mark it loaded.
+      if (get().senderFaviconsEpoch === faviconEpoch) {
+        set({ senderFaviconsLoaded: true, senderFavicons: prefs.senderFavicons === true });
+      } else {
+        set({ senderFaviconsLoaded: true });
+      }
+      if (prefs.shortcuts) set({ shortcuts: prefs.shortcuts });
+      if (Array.isArray(prefs.aiActions)) {
+        set({ aiActions: prefs.aiActions });
+      } else {
+        // First run — seed editable example actions and persist them once so the
+        // seed doesn't reappear after the user deletes them.
+        set({ aiActions: DEFAULT_AI_ACTIONS });
+        api.savePreferences({ aiActions: DEFAULT_AI_ACTIONS }).catch(() => {});
+      }
+      if (prefs.hiddenFolders) set({ hiddenFolders: prefs.hiddenFolders });
+      set({ folderOrder: cacheFolderOrderFromPreferences(prefs) });
+      if (prefs.expandedAccounts && typeof prefs.expandedAccounts === 'object' && !Array.isArray(prefs.expandedAccounts)) {
+        localStorage.setItem('mailflow_expanded_accounts', JSON.stringify(prefs.expandedAccounts));
+        set({ expandedAccounts: prefs.expandedAccounts });
+      }
+      if (Array.isArray(prefs.collapsedFolders)) {
+        localStorage.setItem('mailflow_collapsed_folders', JSON.stringify(prefs.collapsedFolders));
+        set({ collapsedFolders: prefs.collapsedFolders });
+      }
+      if (Array.isArray(prefs.favoriteFolders)) {
+        localStorage.setItem('mailflow_favorite_folders', JSON.stringify(prefs.favoriteFolders));
+        set({ favoriteFolders: prefs.favoriteFolders });
+      }
+      if (Array.isArray(prefs.recentFolders)) {
+        localStorage.setItem('mailflow_recent_folders', JSON.stringify(prefs.recentFolders));
+        set({ recentFolders: prefs.recentFolders });
+      }
+      if (prefs.language) {
+        localStorage.setItem('mailflow_language', prefs.language);
+        set({ language: prefs.language });
+        i18n.changeLanguage(prefs.language);
+      }
+      if (isConversationMode(prefs.conversationMode) || typeof prefs.threadedView === 'boolean') {
+        const mode = resolveConversationMode(prefs);
+        localStorage.setItem('mailflow_conversation_mode', mode);
+        localStorage.setItem('mailflow_threaded_view', String(groupsMessageList(mode)));
+        set({ conversationMode: mode, threadedView: groupsMessageList(mode) });
+      }
+      if (typeof prefs.plaintextEmail === 'boolean') {
+        localStorage.setItem('mailflow_plaintext_email', String(prefs.plaintextEmail));
+        set({ plaintextEmail: prefs.plaintextEmail });
+      }
+      if (typeof prefs.defaultSender === 'string') {
+        localStorage.setItem('mailflow_default_sender', prefs.defaultSender);
+        set({ defaultSender: prefs.defaultSender });
+      }
+      if (typeof prefs.hoverQuickActions === 'boolean') {
+        localStorage.setItem('mailflow_hover_quick_actions', String(prefs.hoverQuickActions));
+        set({ hoverQuickActions: prefs.hoverQuickActions });
+      }
+      if (Array.isArray(prefs.hoverActionSet)) {
+        const hoverSet = sanitizeHoverActionSet(prefs.hoverActionSet);
+        localStorage.setItem('mailflow_hover_action_set', JSON.stringify(hoverSet));
+        set({ hoverActionSet: hoverSet });
+      }
+      if (typeof prefs.showMobileAvatars === 'boolean') {
+        localStorage.setItem('mailflow_show_mobile_avatars', String(prefs.showMobileAvatars));
+        set({ showMobileAvatars: prefs.showMobileAvatars });
+      }
+      if (typeof prefs.gravatarAvatars === 'boolean') {
+        localStorage.setItem('mailflow_gravatar_avatars', String(prefs.gravatarAvatars));
+        set({ gravatarAvatars: prefs.gravatarAvatars });
+      }
+      if (typeof prefs.showMessagePreviews === 'boolean') {
+        localStorage.setItem('mailflow_show_message_previews', String(prefs.showMessagePreviews));
+        set({ showMessagePreviews: prefs.showMessagePreviews });
+      }
+      if (prefs.replyDefault === 'reply' || prefs.replyDefault === 'replyAll') {
+        localStorage.setItem('mailflow_reply_default', prefs.replyDefault);
+        set({ replyDefault: prefs.replyDefault });
+      }
+      if (prefs.markReadBehavior === 'immediate' || prefs.markReadBehavior === 'delay' || prefs.markReadBehavior === 'manual') {
+        localStorage.setItem('mailflow_mark_read_behavior', prefs.markReadBehavior);
+        set({ markReadBehavior: prefs.markReadBehavior });
+      }
+      if (prefs.markReadDelay) {
+        const n = Math.max(1, Math.min(10, parseInt(prefs.markReadDelay) || 1));
+        localStorage.setItem('mailflow_mark_read_delay', String(n));
+        set({ markReadDelay: n });
+      }
+      if (prefs.sidebarWidth) {
+        const n = parseInt(prefs.sidebarWidth);
+        if (n >= 160 && n <= 400) {
+          localStorage.setItem('mailflow_sidebar_width', String(n));
+          set({ sidebarWidth: n });
+        }
+      }
+      if (typeof prefs.showAppBadge === 'boolean') {
+        localStorage.setItem('mailflow_app_badge', String(prefs.showAppBadge));
+        set({ showAppBadge: prefs.showAppBadge });
+      }
+      if (typeof prefs.showFaviconBadge === 'boolean') {
+        localStorage.setItem('mailflow_favicon_badge', String(prefs.showFaviconBadge));
+        set({ showFaviconBadge: prefs.showFaviconBadge });
+      }
+      if (typeof prefs.categorizationEnabled === 'boolean') {
+        set({ categorizationEnabled: prefs.categorizationEnabled });
+      }
+      if (prefs.rightSidebarWidth != null) {
+        const n = clampRightSidebarWidth(prefs.rightSidebarWidth);
+        localStorage.setItem('mailflow_right_sidebar_width', String(n));
+        set({ rightSidebarWidth: n });
+      }
+      if (prefs.gtdCollapsedSections && typeof prefs.gtdCollapsedSections === 'object' && !Array.isArray(prefs.gtdCollapsedSections)) {
+        localStorage.setItem('mailflow_gtd_collapsed_sections', JSON.stringify(prefs.gtdCollapsedSections));
+        set({ gtdCollapsedSections: prefs.gtdCollapsedSections });
+      }
+      if (typeof prefs.gtdPetSlug === 'string') {
+        set({ gtdPetSlug: prefs.gtdPetSlug || null });
+      }
+      if (typeof prefs.rightSidebarHidden === 'boolean') {
+        localStorage.setItem('mailflow_right_sidebar_hidden', String(prefs.rightSidebarHidden));
+        set({ rightSidebarHidden: prefs.rightSidebarHidden });
+      }
+      if (prefs.customCss) {
+        applyCustomCss(prefs.customCss);
+      }
+    } catch { /* intentional */ }
+  },
+}));
+
+// The RFC message_id of the currently selected message, resolved from the same pools the
+// reading pane uses: the active folder/search list, then any stashed thread — including the
+// __dl_ deep-link stash written by GTD sidebar selection. Returns null when nothing is selected
+// or the selected row has no message_id. Lets the GTD sidebar and message list highlight every
+// copy of the open message by identity (not just the exact DB row that was clicked). A plain selector, not
+// a state field, so it stays in sync with the list automatically; returns a primitive so a
+// useStore(selectSelectedMessageMid) subscription only re-renders when the value changes.
+export function selectSelectedMessageMid(s) {
+  return findSelectedMessage(s)?.message_id ?? null;
+}
+
+// The selected message's account, the companion to selectSelectedMessageMid. isSelectedRow needs
+// both to scope an identity match to one account, so that two accounts' copies of one email
+// (separate rows since #476) do not highlight together. Also a primitive, for the same reason.
+export function selectSelectedMessageAccountId(s) {
+  return findSelectedMessage(s)?.account_id ?? null;
+}
+
+function findSelectedMessage(s) {
+  const id = s.selectedMessageId;
+  if (id == null) return null;
+  const pool = s.searchQuery?.trim() ? s.searchResults : s.messages;
+  return pool.find(m => m.id === id)
+    ?? Object.values(s.threadMessages).flat().find(m => m.id === id)
+    ?? null;
+}

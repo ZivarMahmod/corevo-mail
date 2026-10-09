@@ -1,0 +1,34 @@
+import {it,expect,vi,afterEach} from 'vitest';
+import {corevoFetch,connectCorevoHost,corevoNavigationUrl} from '../../../vendor/mailflow/frontend/src/utils/corevoTransport.js';
+
+afterEach(()=>vi.unstubAllGlobals());
+it('binds RPC to its host, cancels reads and rejects pending work on close',async()=>{
+ const listeners=new Map<string,Set<(e:any)=>void>>(),sent:any[]=[];
+ const host={postMessage:(message:any)=>sent.push(message)};
+ const origin='http://corevo.test',channel='00000000-0000-4000-8000-000000000001';
+ vi.stubGlobal('window',{corevoMailHosted:true});vi.stubGlobal('parent',host);vi.stubGlobal('location',{origin,pathname:'/corevo-mail',search:'',hash:'#'+channel});
+ expect(corevoNavigationUrl('/')).toBe('/corevo-mail#'+channel);
+ vi.stubGlobal('addEventListener',(type:string,fn:any)=>{if(!listeners.has(type))listeners.set(type,new Set());listeners.get(type)!.add(fn);});
+ vi.stubGlobal('removeEventListener',(type:string,fn:any)=>listeners.get(type)?.delete(fn));
+ const message=(data:any,source:any=host,eventOrigin=origin)=>listeners.get('message')?.forEach(fn=>fn({source,origin:eventOrigin,data:{channel,...data}}));
+ const ready=connectCorevoHost();
+ message({type:'bootstrap',context:{user:{id:'wrong'}}},{},'http://evil.test');
+ message({type:'bootstrap',context:{user:{id:'synthetic'}}});
+ expect(await ready).toEqual({user:{id:'synthetic'}});
+ await expect(corevoFetch('https://evil.test/api/mail')).rejects.toThrow('Ogiltigt');
+ const controller=new AbortController();
+ const cancelled=corevoFetch('/api/mail/messages',{signal:controller.signal});
+ controller.abort();await expect(cancelled).rejects.toMatchObject({name:'AbortError'});
+ message({type:'response',id:sent.at(-1).id,status:200,body:{ignored:true}});
+ const read=corevoFetch('/api/accounts');
+ message({type:'response',id:sent.at(-1).id,status:200,body:[]});
+ expect(await(await read).json()).toEqual([]);
+ const invalid=corevoFetch('/api/accounts');
+ message({type:'response',id:sent.at(-1).id,status:0,body:{}});
+ await expect(invalid).rejects.toThrow('Ogiltigt svar');
+ const closing=corevoFetch('/api/mail/messages');
+ listeners.get('pagehide')?.forEach(fn=>fn({}));
+ await expect(closing).rejects.toThrow('stängd');
+ await expect(corevoFetch('/api/accounts')).rejects.toThrow('session');
+ expect(listeners.get('message')?.size).toBe(0);
+});
