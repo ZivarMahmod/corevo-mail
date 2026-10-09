@@ -5,7 +5,7 @@ const account = { binding: { tenantId: 'tenant', ownerUserId: 'owner', mailboxId
 const envelope = data => ({ schemaVersion: 'personal-mailbox-v1', data });
 function fixture() {
   const persisted = new Map(), storage = { getItem: key => persisted.get(key) || null, setItem: (key, value) => persisted.set(key, value) };
-  let current, revision = 0, lost = false, unresolved = false, fileId = 0, failedRead = false;
+  let current, revision = 0, lost = false, unresolved = false, fileId = 0, failedRead = false, notDispatched = false;
   const fileContents = new Map();
   const calls = [], outcomes = new Map(), folders = [{ id: 'drafts', displayName: 'Utkast', parentFolderId: null, childFolderCount: 0, unreadItemCount: 0, totalItemCount: 0 }];
   const call = async (action, input) => {
@@ -14,8 +14,9 @@ function fixture() {
     if (action === 'folders') return envelope({ items: folders, nextCursor: null, wellKnown: { drafts: 'drafts' } });
     if (action === 'message') { expect(input.messageId).toBe('provider-draft'); if(failedRead){failedRead=false;return {error:{code:'busy'}};} return envelope(structuredClone(current)); }
     if (action === 'attachment') { const file = fileContents.get(input.attachmentId); expect(input.expectedRevisionHash).toBe(current.revisionHash); return envelope({ name: file.name, bytesBase64: file.bytesBase64, byteLength: 5, messageRevisionHash: current.revisionHash }); }
-    if (action === 'operation-outcome') return envelope(unresolved ? { ...outcomes.get(input.operationId), state: 'indeterminate' } : outcomes.get(input.operationId));
+    if (action === 'operation-outcome') return outcomes.has(input.operationId) ? envelope(unresolved ? { ...outcomes.get(input.operationId), state: 'indeterminate' } : outcomes.get(input.operationId)) : {error:{code:'operation_unknown'}};
     expect(JSON.stringify([...persisted.values()])).toContain(input.operationId);
+    if(notDispatched){notDispatched=false;return {error:{code:'busy'}};}
     if (['draft-save', 'draft-attachment-add', 'draft-attachment-remove', 'send'].includes(action)) {
       if (input.expectedRevisionHash !== current.revisionHash) return { error: { code: 'revision_conflict' } };
     }
@@ -34,7 +35,7 @@ function fixture() {
     return envelope({ operation });
   };
   const mount = () => createMailboxTransport(call, { storage });
-  return { mount, calls, persisted, failRead:()=>{failedRead=true;}, lose: () => { lost = true; unresolved = true; }, resolve: () => { unresolved = false; }, change: () => { current.revisionHash = 'f'.repeat(64); } };
+  return { mount, calls, persisted, blockDispatch:()=>{notDispatched=true;}, failRead:()=>{failedRead=true;}, lose: () => { lost = true; unresolved = true; }, resolve: () => { unresolved = false; }, change: () => { current.revisionHash = 'f'.repeat(64); } };
 }
 const content = { to: ['recipient@example.test'], cc: [], bcc: [], subject: 'Synthetic', body: 'Reply', bodyHtml: '<p><strong>Reply</strong></p>' };
 async function form(transport) { const [a] = await transport.inventory(); return { accountId: a.id, corevoComposeId: mailboxUUID(), corevoKind: 'compose', corevoContent: content }; }
@@ -99,6 +100,16 @@ test('unknown draft creation survives remount, never duplicates the draft, and a
   f.resolve(); const recovered = await save(reopened, { ...body, corevoContent: { ...content, body: 'New text', bodyHtml: '<p>New text</p>' } });
   expect(recovered.status).toBe(200); expect(f.calls.filter(c => c[0] === 'draft-create')).toHaveLength(1);
   expect(f.calls.find(c => c[0] === 'draft-save')[1].content.body).toBe('New text');
+});
+test('a draft rejected before durable admission recovers the same identifier with current text after remount',async()=>{
+ const f=fixture(),t=f.mount(),body=await form(t);f.blockDispatch();
+ expect((await save(t,body)).body.error).toContain('upptagen');t.dispose();
+ const reopened=f.mount();await reopened.inventory();
+ expect((await save(reopened,{...body,corevoContent:{...content,body:'Text after a rejected admission'}})).status).toBe(200);
+ const creates=f.calls.filter(c=>c[0]==='draft-create');expect(creates).toHaveLength(2);
+ expect(creates[1][1].operationId).toBe(creates[0][1].operationId);
+ expect(creates[1][1].content.body).toBe('Text after a rejected admission');
+ expect(f.calls.filter(c=>c[0]==='draft-save')).toHaveLength(0);
 });
 test('missing durable storage, aliases, attachments and unknown draft identities cannot cause a new provider write', async () => {
   const f = fixture(), t = f.mount(), body = await form(t);

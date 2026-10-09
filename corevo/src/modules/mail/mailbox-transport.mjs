@@ -233,12 +233,19 @@ export function createMailboxTransport(call, { secureTransport = false, signal, 
     draftLocks.add(lock);
     try {
       const store = journal(accountId); let entry = store.entries.find(e => e.key === key), operation;
-      const recovered = !!entry;
+      let recovered = !!entry;
       if (entry) {
         if (entry.action !== action) reject('invalid_request');
         if (entry.state === 'known_failed') reject('provider_rejected');
-        operation = entry.state === 'provider_saved' ? { operationId: entry.operationId, kind: entry.action, state: entry.state, providerMessageId: entry.providerMessageId, providerRevisionHash: entry.providerRevisionHash }
-          : await rpc('operation-outcome', { mailbox: ref(accountId), operationId: entry.operationId });
+        try {
+          operation = entry.state === 'provider_saved' ? { operationId: entry.operationId, kind: entry.action, state: entry.state, providerMessageId: entry.providerMessageId, providerRevisionHash: entry.providerRevisionHash }
+            : await rpc('operation-outcome', { mailbox: ref(accountId), operationId: entry.operationId });
+        } catch (error) {
+          if (error.code !== 'operation_unknown' || !Object.keys(input).length) throw error;
+          // The host admits durably before dispatch; an absent operation never reached the provider.
+          operation = (await rpc(action, { mailbox: ref(accountId), operationId: entry.operationId, ...input })).operation;
+          recovered = false;
+        }
       } else {
         if (store.entries.length >= 200 || action === 'draft-create' && store.entries.some(e => e.action === action && e.state === 'pending')) reject('operation_indeterminate');
         entry = { key, action, operationId: mailboxUUID(), state: 'pending', providerMessageId: null, providerRevisionHash: null };
