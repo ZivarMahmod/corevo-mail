@@ -6,6 +6,7 @@ const errors = {
   account_changed: 'Brevlådans åtkomst har ändrats. Öppna Mejl igen.',
   access_denied: 'Din inloggning har inte åtkomst till brevlådan.',
   not_configured: 'Den här leverantörsanslutningen är inte konfigurerad ännu.',
+  busy: 'Brevlådan är upptagen av en annan åtgärd. Din text finns kvar; försök igen om en stund.',
   operation_indeterminate: 'Utfallet är okänt. Kontrollera anslutningen innan du försöker igen.',
   invalid_request: 'Anropet kunde inte verifieras.',
   aborted: 'Mejlåtgärden avbröts.',
@@ -247,11 +248,12 @@ export function createMailboxTransport(call, { secureTransport = false, signal, 
       if (!operation || operation.operationId !== entry.operationId || operation.kind !== action) reject('operation_indeterminate');
       if (operation.state === 'known_failed') { entry.state = 'known_failed'; store.save(); reject('provider_rejected'); }
       if (operation.state !== 'provider_saved' || !operation.providerMessageId) reject('operation_indeterminate');
-      const current = await rpc('message', { mailbox: ref(accountId), messageId: operation.providerMessageId });
-      if (!current.isDraft || current.id !== operation.providerMessageId || current.revisionHash !== operation.providerRevisionHash) reject('revision_conflict');
-      entry.state = 'provider_saved'; entry.providerMessageId = current.id; entry.providerRevisionHash = current.revisionHash;
+      // Retain the acknowledged result even when its following observation fails.
+      entry.state = 'provider_saved'; entry.providerMessageId = operation.providerMessageId; entry.providerRevisionHash = operation.providerRevisionHash;
       if (operation.attachmentId) entry.attachmentId = operation.attachmentId;
       store.save();
+      const current = await rpc('message', { mailbox: ref(accountId), messageId: operation.providerMessageId });
+      if (!current.isDraft || current.id !== operation.providerMessageId || current.revisionHash !== operation.providerRevisionHash) reject('revision_conflict');
       const dto = messageDto(accountId, current); draftRevisions.set(dto.id, current.revisionHash);
       return { current, dto, recovered };
     } finally { draftLocks.delete(lock); }

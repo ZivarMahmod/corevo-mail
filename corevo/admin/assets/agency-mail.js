@@ -5,7 +5,7 @@
     var disposed=false,authorized=false,editing=false,frame,transport,unsubscribe,loading=document.createElement('p'),controller=new AbortController();
     var testData=!!(scope&&scope.mailTestData),connectionError=null;
     var oldHeight=root.style.height;root.style.height='100%';
-    function fit(){if(!disposed)root.style.height=Math.max(320,window.innerHeight-Math.max(0,root.getBoundingClientRect().top)-24)+'px';}
+    function fit(){if(!disposed){var feedback=document.querySelector('.corevo-dev-bar'),reserved=feedback?feedback.getBoundingClientRect().height+24:24;root.style.height=Math.max(320,window.innerHeight-Math.max(0,root.getBoundingClientRect().top)-reserved)+'px';}}
     window.addEventListener('resize',fit);
     root.classList.add('agency-native-mail');root.replaceChildren();
     loading.textContent='Öppnar Corevo Mail…';loading.setAttribute('role','status');root.appendChild(loading);

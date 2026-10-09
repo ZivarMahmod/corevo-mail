@@ -5,14 +5,14 @@ const account = { binding: { tenantId: 'tenant', ownerUserId: 'owner', mailboxId
 const envelope = data => ({ schemaVersion: 'personal-mailbox-v1', data });
 function fixture() {
   const persisted = new Map(), storage = { getItem: key => persisted.get(key) || null, setItem: (key, value) => persisted.set(key, value) };
-  let current, revision = 0, lost = false, unresolved = false, fileId = 0;
+  let current, revision = 0, lost = false, unresolved = false, fileId = 0, failedRead = false;
   const fileContents = new Map();
   const calls = [], outcomes = new Map(), folders = [{ id: 'drafts', displayName: 'Utkast', parentFolderId: null, childFolderCount: 0, unreadItemCount: 0, totalItemCount: 0 }];
   const call = async (action, input) => {
     calls.push([action, input]);
     if (action === 'accounts') return envelope({ items: [account] });
     if (action === 'folders') return envelope({ items: folders, nextCursor: null, wellKnown: { drafts: 'drafts' } });
-    if (action === 'message') { expect(input.messageId).toBe('provider-draft'); return envelope(structuredClone(current)); }
+    if (action === 'message') { expect(input.messageId).toBe('provider-draft'); if(failedRead){failedRead=false;return {error:{code:'busy'}};} return envelope(structuredClone(current)); }
     if (action === 'attachment') { const file = fileContents.get(input.attachmentId); expect(input.expectedRevisionHash).toBe(current.revisionHash); return envelope({ name: file.name, bytesBase64: file.bytesBase64, byteLength: 5, messageRevisionHash: current.revisionHash }); }
     if (action === 'operation-outcome') return envelope(unresolved ? { ...outcomes.get(input.operationId), state: 'indeterminate' } : outcomes.get(input.operationId));
     expect(JSON.stringify([...persisted.values()])).toContain(input.operationId);
@@ -34,7 +34,7 @@ function fixture() {
     return envelope({ operation });
   };
   const mount = () => createMailboxTransport(call, { storage });
-  return { mount, calls, persisted, lose: () => { lost = true; unresolved = true; }, resolve: () => { unresolved = false; }, change: () => { current.revisionHash = 'f'.repeat(64); } };
+  return { mount, calls, persisted, failRead:()=>{failedRead=true;}, lose: () => { lost = true; unresolved = true; }, resolve: () => { unresolved = false; }, change: () => { current.revisionHash = 'f'.repeat(64); } };
 }
 const content = { to: ['recipient@example.test'], cc: [], bcc: [], subject: 'Synthetic', body: 'Reply', bodyHtml: '<p><strong>Reply</strong></p>' };
 async function form(transport) { const [a] = await transport.inventory(); return { accountId: a.id, corevoComposeId: mailboxUUID(), corevoKind: 'compose', corevoContent: content }; }
@@ -82,6 +82,16 @@ test('native drafts use the provider identity, keep rich text and preserve the e
   expect(JSON.stringify([...f.persisted.values()])).not.toMatch(/recipient@example|Reply|<p>|bodyHtml/);
   f.change(); expect((await save(t, edited)).status).toBe(409);
 });
+test('acknowledged draft survives a failed observation and remount without another creation',async()=>{
+ const f=fixture(),t=f.mount(),body=await form(t);f.failRead();
+ const failed=await save(t,body);expect(failed.body.error).toContain('Din text finns kvar');
+ expect(JSON.parse([...f.persisted.values()][0])[0].state).toBe('provider_saved');
+ t.dispose();const reopened=f.mount();await form(reopened);
+ expect((await save(reopened,{...body,corevoContent:{...content,body:'Text retained after observation failure'}})).status).toBe(200);
+ expect(f.calls.filter(c=>c[0]==='draft-create')).toHaveLength(1);
+ expect(f.calls.filter(c=>c[0]==='operation-outcome')).toHaveLength(0);
+});
+
 test('unknown draft creation survives remount, never duplicates the draft, and applies newly typed text only after recovery', async () => {
   const f = fixture(), t = f.mount(), body = await form(t); f.lose(); expect((await save(t, body)).status).toBe(409); t.dispose();
   const reopened = f.mount(); await reopened.inventory();

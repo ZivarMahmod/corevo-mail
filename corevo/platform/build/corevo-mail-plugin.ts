@@ -32,7 +32,8 @@ export function corevoMailPlugin(): Plugin {
       this.emitFile({ type: 'asset', fileName: 'src/modules/mail/mailbox-uuid.mjs', source: await readFile('src/modules/mail/mailbox-uuid.mjs', 'utf8') });
       this.emitFile({ type: 'asset', fileName: 'corevo-mail-license.txt', source: await readFile('vendor/mailflow/LICENSE', 'utf8') });
       this.emitFile({ type: 'asset', fileName: 'corevo-mail-notices.txt', source: await readFile('vendor/mailflow/THIRD-PARTY-NOTICES.txt', 'utf8') });
-      const source = execFileSync('tar', ['-czf', '-', '--exclude=node_modules', '--exclude=dist', '--exclude=.git', '--exclude=.env*', '--exclude=*.pem', '--exclude=*.key', 'vendor/mailflow', 'src/modules/mail', 'platform/build/corevo-mail-plugin.ts', 'admin/assets/agency-mail.js', 'admin/assets/fonts.css', 'admin/assets/fonts'], { maxBuffer: 32 * 1024 * 1024 });
+      const normalized = process.platform === 'linux' ? ['--sort=name', '--mtime=@0', '--owner=0', '--group=0', '--numeric-owner'] : [];
+      const source = execFileSync('tar', ['-czf', '-', ...normalized, '--exclude=node_modules', '--exclude=dist', '--exclude=.git', '--exclude=.env*', '--exclude=*.pem', '--exclude=*.key', 'vendor/mailflow', 'src/modules/mail', 'platform/build/corevo-mail-plugin.ts', 'admin/assets/agency-mail.js', 'admin/assets/fonts.css', 'admin/assets/fonts'], { maxBuffer: 32 * 1024 * 1024 });
       this.emitFile({ type: 'asset', fileName: 'corevo-mail-source.tar.gz', source });
     },
     resolveId(id) { if (id === 'virtual:corevo-mail-css') return '\0corevo-mail-css'; },
