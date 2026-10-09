@@ -399,9 +399,24 @@ export const api = {
   beginGmailConnection: () => request('POST', '/corevo/connections/gmail'),
 
   // Sync
-  syncNow: (accountId) => request('POST', '/mail/sync', accountId ? { accountId } : {}),
-  syncFolder: (accountId, folder) => request('POST', '/mail/sync-folder', { accountId, folder }),
-  syncFoldersNow: (accountId) => request('POST', '/mail/sync-folders', accountId ? { accountId } : {}),
+  syncNow: async (accountId) => {
+    const data = await request('POST', '/mail/sync', accountId ? { accountId } : {});
+    if (window.corevoMailHosted) {
+      window.dispatchEvent(new CustomEvent('mailflow:refresh'));
+      window.dispatchEvent(new CustomEvent('mailflow:sync_done'));
+    }
+    return data;
+  },
+  syncFolder: async (accountId, folder) => {
+    const data = await request('POST', '/mail/sync-folder', { accountId, folder });
+    if (window.corevoMailHosted) window.dispatchEvent(new CustomEvent('mailflow:refresh'));
+    return data;
+  },
+  syncFoldersNow: async (accountId) => {
+    const data = await request('POST', '/mail/sync-folders', accountId ? { accountId } : {});
+    if (window.corevoMailHosted) window.dispatchEvent(new CustomEvent('mailflow:refresh'));
+    return data;
+  },
 
   // Folder management
   createFolder: (accountId, name, parentPath) => request('POST', '/mail/folders', { accountId, name, parentPath }),

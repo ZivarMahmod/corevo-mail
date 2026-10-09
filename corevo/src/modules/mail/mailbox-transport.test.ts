@@ -101,6 +101,25 @@ const providerMessage = (n = 0) => ({ id: 'provider-message-' + n, conversationI
   isDraft: false, isRead: n >= 5, subject: 'Meddelande ' + n, from: 'sender@example.test', to: [account.address], cc: [], bcc: [],
   receivedAt: new Date(Date.UTC(2026, 9, 9, 12, 0) - n * 60000).toISOString(), sentAt: null, hasAttachments: false });
 
+test('native manual sync controls reach the same bounded provider flow for inbox and the selected folder',async()=>{
+ const calls=[];
+ const t=createMailboxTransport(async(action,input)=>{
+  calls.push([action,input]);
+  if(action==='accounts')return result({items:[account]});
+  if(action==='folders')return result({items:providerFolders.slice(0,3),nextCursor:null,wellKnown:{inbox:'inbox-id',drafts:'draft-id',sentitems:'sent-id'}});
+  if(action==='sync-status')return result({checkpointRevision:'checkpoint'});
+  if(action==='sync-step')return result({state:'current',lastError:null});
+  throw Error('unexpected provider action');
+ });
+ const id=(await t.request('/api/accounts')).body[0].id;
+ for(const [route,body] of [['sync',{accountId:id}],['sync-folder',{accountId:id,folder:'Drafts'}],['sync-folders',{}]]){
+  const value=await t.request('/api/mail/'+route,'POST',JSON.stringify(body));expect(value.status).toBe(200);expect(value.body.items[0].state).toBe('current');
+ }
+ expect(calls.filter(c=>c[0]==='sync-step').map(c=>c[1].folderId)).toEqual(['inbox-id','draft-id','inbox-id']);
+ expect((await t.request('/api/mail/sync-folder','POST',JSON.stringify({folder:'Drafts'}))).status).toBe(409);
+ expect((await t.request('/api/mail/sync','POST',JSON.stringify({privateEndpoint:'unexpected'}))).status).toBe(409);
+});
+
 test('native folder views keep locale-independent roles and collect paginated roots and children', async () => {
   const calls = [];
   const transport = createMailboxTransport(async (action, input) => {

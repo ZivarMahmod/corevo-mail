@@ -414,6 +414,10 @@ export function createMailboxTransport(call, { secureTransport = false, signal, 
       if (route === '/api/mail/review' && method === 'POST') return reply(await reviewSend(body));
       if (route === '/api/mail/send' && method === 'POST') return reply(await sendReviewed(body));
       if (route === '/api/accounts' && method === 'GET') return reply(await inventory());
+      if (method === 'POST' && ['/api/mail/sync', '/api/mail/sync-folder', '/api/mail/sync-folders'].includes(route)) {
+        if (Object.keys(body).some(key => !['accountId', 'folder'].includes(key)) || route.endsWith('sync-folder') && typeof body.accountId !== 'string') reject('invalid_request');
+        return request('/api/mail/corevo-sync', 'POST', JSON.stringify({ accountId: body.accountId ?? null, folder: route.endsWith('sync-folder') ? body.folder : 'INBOX' }));
+      }
       if (route === '/api/mail/corevo-sync' && method === 'POST') {
         if (Object.keys(body).some(key => !['accountId', 'folder'].includes(key)) || body.accountId !== null && typeof body.accountId !== 'string' || typeof body.folder !== 'string' || body.folder.length > 1024) reject('invalid_request');
         const items = [], byAccount = {}, snapshots = {}, accountIds = selectedAccounts(body.accountId);

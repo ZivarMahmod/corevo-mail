@@ -2500,7 +2500,7 @@ export default function MessageList() {
   };
 
   const handleSelect = async (message) => {
-    if (isDraftsFolder) {
+    if (isDraftsFolder || message.is_draft) {
       try {
         const [bodyData, bcc] = await Promise.all([
           api.getMessageBody(message.id),
