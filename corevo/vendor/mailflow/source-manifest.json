@@ -61,7 +61,7 @@
     {
       "path": "frontend/src/components/AdminPanel.jsx",
       "upstreamSha256": "9431786ccd85ee80e7ca921aca5ad2dd888b29bf3af7c1c49b466fef27690927",
-      "currentSha256": "163fdef9b3404287c5f7bae4d46df768e5856f1bcf723ed8028b22728fd057eb",
+      "currentSha256": "88e19748ab6e75e57cfc499653c040702b7bf84e14e75a34d377578c55490cd9",
       "modified": true
     },
     {
@@ -307,7 +307,7 @@
     {
       "path": "frontend/src/components/MessageList.jsx",
       "upstreamSha256": "0492d821293bf25d8d214a975b1980207fc0ccf4443c28ef2060574e76aadcf5",
-      "currentSha256": "8b8274e542343632444d019828b4d590ce26f4c093b976a9d4a7fc0ab2f0f999",
+      "currentSha256": "c51d72b5e64ee75798b25268c09fe8ac4e11918f49029228ff8701a947c7930e",
       "modified": true
     },
     {
@@ -799,7 +799,7 @@
     {
       "path": "frontend/src/utils/api.js",
       "upstreamSha256": "5ec29cdc0353b01e5cc0c7faf0976cf57680bd78dfd287d5e3593671a4db9196",
-      "currentSha256": "fdc203f17ce41f7a30f686f45899e108bb22c642105499139312a37fc64474a7",
+      "currentSha256": "a67c360f94c195400eed0d2b302984932b34983e0a602cb8b252887eca183a86",
       "modified": true
     },
     {
@@ -1087,8 +1087,8 @@
     {
       "path": "frontend/src/utils/folderDisplay.js",
       "upstreamSha256": "cd28d1003c477c27cd8702d37011c242b5f8b6c40bb1cde9989a13e9c8e0af67",
-      "currentSha256": "cd28d1003c477c27cd8702d37011c242b5f8b6c40bb1cde9989a13e9c8e0af67",
-      "modified": false
+      "currentSha256": "443a1ce95acb8a78909df1d6abba79176d4557293ff2ea0711af63736e72d1a9",
+      "modified": true
     },
     {
       "path": "frontend/src/utils/folderDisplay.test.js",

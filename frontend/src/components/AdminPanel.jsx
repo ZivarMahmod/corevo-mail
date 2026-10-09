@@ -70,6 +70,7 @@ const COLORS = [
 
 // ─── IMAP presets ─────────────────────────────────────────────────────────────
 const PRESETS = {
+  onecom:  { label: 'One.com', imap_host: 'imap.one.com', imap_port: 993, smtp_host: 'send.one.com', smtp_port: 465, smtp_tls: 'TLS' },
   gmail:   { label: 'Gmail',   imap_host: 'imap.gmail.com',        imap_port: 993, smtp_host: 'smtp.gmail.com',        smtp_port: 587 },
   yahoo:   { label: 'Yahoo',   imap_host: 'imap.mail.yahoo.com',   imap_port: 993, smtp_host: 'smtp.mail.yahoo.com',   smtp_port: 587 },
   icloud:  { label: 'iCloud',  imap_host: 'imap.mail.me.com',      imap_port: 993, smtp_host: 'smtp.mail.me.com',      smtp_port: 587 },
@@ -165,7 +166,7 @@ function AccountForm({ initial, onSave, onCancel }) {
         <div style={{ display: 'flex', gap: 6, marginBottom: 18, flexWrap: 'wrap' }}>
           {Object.entries(PRESETS).map(([key]) => {
             const active = selectedPreset === key;
-            const presetLabel = key === 'gmail' ? t('admin.accounts.presetGmail') : key === 'yahoo' ? t('admin.accounts.presetYahoo') : key === 'icloud' ? t('admin.accounts.presetIcloud') : t('admin.accounts.presetCustom');
+            const presetLabel = key === 'onecom' ? 'One.com' : key === 'gmail' ? t('admin.accounts.presetGmail') : key === 'yahoo' ? t('admin.accounts.presetYahoo') : key === 'icloud' ? t('admin.accounts.presetIcloud') : t('admin.accounts.presetCustom');
             return (
               <button key={key} onClick={() => handlePreset(key)} style={{
                 padding: '5px 12px', borderRadius: 20, fontSize: 12, fontWeight: 500,
@@ -582,7 +583,7 @@ function AccountForm({ initial, onSave, onCancel }) {
 // ─── Accounts Tab ─────────────────────────────────────────────────────────────
 function AccountsTab() {
   const { t } = useTranslation();
-  const { accounts, setAccounts, updateAccount, setUnreadCounts, addNotification, backfillProgress } = useStore();
+  const { accounts, setAccounts, updateAccount, setUnreadCounts, addNotification, backfillProgress, setAdminTab } = useStore();
   const [subview, setSubview] = useState('list'); // 'list' | 'add' | 'edit' | 'folders' | 'aliases'
   const [editTarget, setEditTarget] = useState(null);
   const [folderMappings, setFolderMappings] = useState({});
@@ -627,9 +628,9 @@ function AccountsTab() {
 
   const handleDelete = (id) => {
     setConfirmDialog({
-      title: 'Remove account?',
-      message: 'All synced messages for this account will be deleted. This cannot be undone.',
-      confirmLabel: 'Remove',
+      title: window.corevoMailHosted ? 'Koppla från brevlådan?' : 'Remove account?',
+      message: window.corevoMailHosted ? 'Kontot kopplas från Corevo. Mejlen finns kvar hos din leverantör.' : 'All synced messages for this account will be deleted. This cannot be undone.',
+      confirmLabel: window.corevoMailHosted ? 'Koppla från' : 'Remove',
       onConfirm: async () => {
         await api.deleteAccount(id);
         setAccounts(accounts.filter(a => a.id !== id));
@@ -1087,6 +1088,11 @@ function AccountsTab() {
         <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-tertiary)', fontSize: 14 }}>
           {t('admin.accounts.empty')}
         </div>
+      )}
+      {window.corevoMailHosted && (
+        <button onClick={() => setAdminTab('integrations')} style={{ padding: '10px 14px', marginBottom: 16, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', cursor: 'pointer' }}>
+          Anslut Outlook eller Gmail med säker OAuth
+        </button>
       )}
 
       {accounts.map(account => (
@@ -2514,6 +2520,7 @@ function IntegrationsTab() {
   const [googleForm, setGoogleForm] = useState({ clientId: '', clientSecret: '', redirectUri: '' });
   const [googleExpanded, setGoogleExpanded] = useState(false);
   const [connectingGoogle, setConnectingGoogle] = useState(false);
+  const [corevoGoogleFlow, setCorevoGoogleFlow] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
   const [connectingMs, setConnectingMs] = useState(false);
@@ -2582,6 +2589,7 @@ function IntegrationsTab() {
     // URL-param detection has been moved to MailApp so it works regardless of
     // which tab/modal is currently open.
     const handleMessage = (e) => {
+      if (window.corevoMailHosted) return; // Corevo verifies its own callback, not popup claims.
       if (e.origin !== window.location.origin) return;
       if (e.data?.type === 'oauth_success' && e.data?.provider === 'microsoft') {
         setSaveMsg(t('admin.integrations.microsoft.connectedNote'));
@@ -2644,7 +2652,10 @@ function IntegrationsTab() {
       const data = await api.startMsDeviceFlow();
       setDeviceFlow(data);
       const intervalMs = (data.interval || 5) * 1000;
+      let polling = false;
       devicePollRef.current = setInterval(async () => {
+        if (polling) return;
+        polling = true;
         try {
           const result = await api.pollMsDeviceFlow();
           if (result.status === 'pending') return;
@@ -2660,7 +2671,7 @@ function IntegrationsTab() {
           clearInterval(devicePollRef.current);
           devicePollRef.current = null;
           setDeviceStatus('error');
-        }
+        } finally { polling = false; }
       }, intervalMs);
     } catch (err) {
       setDeviceStatus('error');
@@ -2669,6 +2680,7 @@ function IntegrationsTab() {
   };
 
   const handleConnectMs = () => {
+    if (window.corevoMailHosted) { void handleStartDeviceFlow(); return; }
     setConnectingMs(true);
     // Use a real anchor click so the browser treats it as a normal navigation
     // window.open gets intercepted by some browser extensions (e.g. claude.ai in Zen)
@@ -2704,7 +2716,18 @@ function IntegrationsTab() {
     }
   };
 
-  const handleConnectGoogle = () => {
+  const handleConnectGoogle = async () => {
+    if (window.corevoMailHosted) {
+      setConnectingGoogle(true);
+      try {
+        const data = await api.beginGmailConnection();
+        const target = new URL(data.authorizationUrl);
+        if (target.origin !== 'https://accounts.google.com' || target.pathname !== '/o/oauth2/v2/auth') throw new Error('Google-adressen kunde inte verifieras.');
+        setCorevoGoogleFlow(data);
+      } catch (error) { setSaveMsg(error.message); }
+      finally { setConnectingGoogle(false); }
+      return;
+    }
     setConnectingGoogle(true);
     // Real anchor click rather than window.open — see handleConnectMs.
     const a = document.createElement('a');
@@ -2941,6 +2964,11 @@ function IntegrationsTab() {
                     {connectingGoogle ? t('admin.integrations.google.redirecting') : t('admin.integrations.google.connect')}
                   </button>
 
+                  {corevoGoogleFlow && (
+                    <a href={corevoGoogleFlow.authorizationUrl} target="_top" rel="noreferrer" style={{ padding: '9px 16px', color: 'var(--accent)' }}>
+                      Fortsätt hos Google — återvänd sedan till Corevo
+                    </a>
+                  )}
                   {isAdmin && configs.google?.clientId && (
                     <button onClick={async () => {
                       await api.deleteIntegration('google');
@@ -3251,7 +3279,7 @@ function IntegrationsTab() {
                         </>
                       )}
                       {deviceStatus !== 'success' && (
-                        <button onClick={stopDeviceFlow} style={{
+                        <button onClick={() => { if (window.corevoMailHosted) api.cancelMsDeviceFlow().finally(stopDeviceFlow); else stopDeviceFlow(); }} style={{
                           marginTop: 10, padding: '5px 10px', background: 'transparent',
                           border: '1px solid var(--border)', borderRadius: 6,
                           color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 11,

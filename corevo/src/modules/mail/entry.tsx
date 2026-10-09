@@ -25,13 +25,14 @@ connectCorevoHost().then(async context => {
     common: { cancel: 'Avbryt', save: 'Spara', delete: 'Ta bort', edit: 'Redigera', add: 'Lägg till', remove: 'Ta bort', back: 'Tillbaka', undo: 'Ångra', view: 'Visa', retry: 'Försök igen', loading: 'Läser in…', saving: 'Sparar…', noSubject: '(utan ämne)', dismiss: 'Stäng', loadMore: 'Visa fler' },
     sidebar: { compose: 'Skriv mejl', allInboxes: 'Alla inkorgar', settings: 'Inställningar', toggleSidebar: 'Visa/dölj mappar', folders: 'Mappar', addAccount: 'Anslut brevlåda' },
     folders: { inbox: 'Inkorg', sent: 'Skickat', drafts: 'Utkast', trash: 'Papperskorg', spam: 'Skräppost', archive: 'Arkiv' },
-    compose: { newMessage: 'Nytt mejl – testdata', reply: 'Svara', replyAll: 'Svara alla', forward: 'Vidarebefordra', from: 'Från', to: 'Till', subject: 'Ämne', subjectPh: 'Lägg till ämne', bodyPh: 'Skriv ditt mejl…', send: 'Skicka', sending: 'Skickar…', discard: 'Kasta', saveDraft: 'Spara testutkast', draftSaved: 'Testutkast sparat', closeDraft: {title:'Spara testutkast?',save:'Spara',discard:'Kasta',keepEditing:'Fortsätt skriva'} },
+    compose: { newMessage: context.testData ? 'Nytt mejl – testdata' : 'Nytt mejl', reply: 'Svara', replyAll: 'Svara alla', forward: 'Vidarebefordra', from: 'Från', to: 'Till', subject: 'Ämne', subjectPh: 'Lägg till ämne', bodyPh: 'Skriv ditt mejl…', send: 'Skicka', sending: 'Skickar…', discard: 'Kasta', saveDraft: context.testData ? 'Spara testutkast' : 'Spara utkast', draftSaved: context.testData ? 'Testutkast sparat' : 'Utkast sparat', closeDraft: {title:context.testData?'Spara testutkast?':'Spara utkast?',save:'Spara',discard:'Kasta',keepEditing:'Fortsätt skriva'} },
     message: { selectToRead: 'Välj ett mejl för att läsa' },
   }, true, true);
   await i18n.changeLanguage('sv');
   useStore.getState().setUser(context.user);
   useStore.setState({ theme: context.theme === 'light' ? 'light' : 'dark', selectedAccountId: null, selectedFolder: 'INBOX', fontSize: 100, senderFavicons: false, showFaviconBadge: false, showAppBadge: false, enabledPlugins: [], autoLockMinutes: 0 });
   await useStore.getState().loadPreferences();
+  if (context.connectionError) useStore.getState().addNotification({ type: 'error', title: 'Anslut brevlåda', body: context.connectionError });
   themes.applyTheme(context.theme === 'light' ? 'light' : 'dark');
   const palette = context.palette;
   for (const [key, value] of Object.entries(palette || {})) document.documentElement.style.setProperty(key, String(value));

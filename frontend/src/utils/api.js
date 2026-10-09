@@ -372,8 +372,12 @@ export const api = {
   },
   pollMsDeviceFlow: async () => {
     const res = await corevoFetch('/oauth/microsoft/device/poll', { credentials: 'include' });
-    return res.json();
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Microsoft connection could not be verified');
+    return data;
   },
+  cancelMsDeviceFlow: () => corevoFetch('/oauth/microsoft/device/cancel', { method: 'POST' }),
+  beginGmailConnection: () => request('POST', '/corevo/connections/gmail'),
 
   // Sync
   syncNow: (accountId) => request('POST', '/mail/sync', accountId ? { accountId } : {}),

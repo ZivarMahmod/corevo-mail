@@ -19,6 +19,7 @@ export function folderParentPath(path, delimiter) {
 // so same-named folders under different parents stay distinguishable.
 // Empty string for root-level folders.
 export function folderParentLabel(folder) {
+  if (typeof folder?.parent_label === 'string') return folder.parent_label;
   const path = typeof folder?.path === 'string' ? folder.path : '';
   const delimiter = folderDelimiter(folder);
   const parent = path ? folderParentPath(path, delimiter) : null;
@@ -33,6 +34,7 @@ export function folderMatchesQuery(folder, query) {
   if (!q) return true;
   const name = String(folder?.name ?? '').toLowerCase();
   if (name.includes(q)) return true;
+  if (folderParentLabel(folder).toLowerCase().includes(q)) return true;
   const path = String(folder?.path ?? '').toLowerCase();
   if (path.includes(q)) return true;
   return path.split(folderDelimiter(folder).toLowerCase()).join('/').includes(q);

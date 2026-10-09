@@ -6,7 +6,9 @@ Corevo Mail incorporates the actual MailFlow client source into an existing host
 
 ## Current milestone
 
-U2: original inbox/navigation, lists/reading, rich composition, attachments, preferences and helpers are incorporated. Demonstration data is explicit, transient and synthetic. Sending is refused. This is not a claim of completed Graph/Gmail/IMAP connections. Corevo's existing provider services will be connected in U3–U8 without replacing working client implementations.
+U2 is incorporated; U3–U5 mappings are in progress. Normal mounts now use the host's verified account inventory and provider connection lifecycle. The native client is connected to paginated folders, lists, search, threads, text reading, attachments, read state and journaled moves. Synthetic contract tests verify these mappings, including account isolation and uncertain outcomes; they do not establish a new real-provider end-to-end result. Provider search limits are displayed explicitly. Full durable projection/backfill, remaining account settings/reconnect cases, rich provider content, draft/send, advanced operations and remount recovery remain open.
+
+The separate U2 demonstration mode remains explicit, transient and synthetic. It refuses sending and never connects a provider. Normal account results do not fall back to demonstration mail when a real connection fails. Unsupported functions fail with an explicit message and perform no provider action.
 
 ## Rebuild without the private Corevo repository
 
@@ -17,6 +19,7 @@ cd corevo
 npm ci --ignore-scripts
 npm run build
 npm test
+npm run test:native
 ```
 
 The result is static client assets. A compatible host serves them and implements the documented message/API interface (`corevo/src/modules/mail/HOST.md`). The client's own bootstrap cannot access mail without a host's authority check. No MailFlow server or background service is installed by this build.
@@ -24,3 +27,5 @@ The result is static client assets. A compatible host serves them and implements
 The source archive offered in the UI is generated from the same module files and preserves the original notices and Inter font license. Corevo-specific modifications are recorded in `corevo/vendor/mailflow/UPSTREAM.md`. The private platform, configuration, credentials and customer data are not included in this repository.
 
 The build rejects imports of private platform modules into the client's static/dynamic dependency closure. That is a technical check, not a legal opinion that an iframe/API alone determines combined-work scope. AGPL license/source rights apply to this module; no additional restriction is imposed on downstream modification.
+
+Known build-tool advisories and required release checks are documented in [BUILD-SECURITY.md](corevo/src/modules/mail/BUILD-SECURITY.md). This source checkpoint is not a production release.

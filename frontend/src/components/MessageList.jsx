@@ -313,6 +313,7 @@ export default function MessageList() {
   // Server/network failure of the active search (e.g. rate-limit 429). Shown in
   // the empty state instead of a misleading "no results".
   const [searchError, setSearchError] = useState(null);
+  const [searchCoverage, setSearchCoverage] = useState(null);
 
   // Ref that always holds the latest values needed by shortcut handlers.
   // Updated synchronously on every render so handlers are never stale.
@@ -419,7 +420,7 @@ export default function MessageList() {
             setMessagesTotal(data.total);
             setMessages(applyReadGuard(data.messages));
             setMessagesOffset(data.messages.length);
-            setHasMoreMessages(data.messages.length < data.total);
+            setHasMoreMessages(data.hasMore ?? data.messages.length < data.total);
 
             // Pull the folder from IMAP whenever it is opened, not only when it happens to
             // be empty. Only INBOX is polled in the background, so every other folder showed
@@ -474,7 +475,7 @@ export default function MessageList() {
       const data = await api.getMessages(params);
       appendMessages(applyReadGuard(data.messages));
       setMessagesOffset(currentOffset + data.messages.length);
-      setHasMoreMessages(currentOffset + data.messages.length < data.total);
+      setHasMoreMessages(data.hasMore ?? currentOffset + data.messages.length < data.total);
     } catch (err) {
       console.error('Failed to load more messages:', err);
     } finally {
@@ -517,10 +518,10 @@ export default function MessageList() {
             }
             setMessages(msgs);
             if (sm === 'paginated') {
-              setHasMoreMessages(false);
+              setHasMoreMessages(data.hasMore ?? false);
             } else {
               setMessagesOffset(data.messages.length);
-              setHasMoreMessages(data.messages.length < data.total);
+              setHasMoreMessages(data.hasMore ?? data.messages.length < data.total);
             }
           },
         );
@@ -566,7 +567,8 @@ export default function MessageList() {
         if (searchSeq.current !== seq) return;
         searchFetchedOffsetRef.current = data.messages.length;
         setSearchResults(applyReadGuard(data.messages));
-        setSearchHasMore(data.messages.length === searchPageSize);
+        setSearchHasMore(data.hasMore ?? data.messages.length === searchPageSize);
+        setSearchCoverage(data.coverage || null);
       } catch (err) {
         if (searchSeq.current === seq) {
           console.error('Search failed:', err);
@@ -612,7 +614,7 @@ export default function MessageList() {
       searchFetchedOffsetRef.current = offset + data.messages.length;
       const current = useStore.getState().searchResults;
       useStore.setState({ searchResults: [...current, ...applyReadGuard(data.messages)] });
-      setSearchHasMore(data.messages.length === searchPageSize);
+      setSearchHasMore(data.hasMore ?? data.messages.length === searchPageSize);
     } catch (err) {
       console.error('Search load more failed:', err);
     } finally {
@@ -629,7 +631,7 @@ export default function MessageList() {
       searchFetchedOffsetRef.current = Math.max(searchFetchedOffsetRef.current, offset + data.messages.length);
       const additions = applyReadGuard(data.messages);
       if (!additions.length) {
-        setSearchHasMore(data.messages.length === searchPageSize);
+        setSearchHasMore(data.hasMore ?? data.messages.length === searchPageSize);
         return;
       }
       useStore.setState(state => {
@@ -637,7 +639,7 @@ export default function MessageList() {
         const missing = additions.filter(m => m && !existing.has(m.id));
         return missing.length ? { searchResults: [...state.searchResults, ...missing] } : {};
       });
-      setSearchHasMore(data.messages.length === searchPageSize);
+      setSearchHasMore(data.hasMore ?? data.messages.length === searchPageSize);
     } catch (err) {
       console.error('Search prefetch after delete failed:', err);
     }
@@ -676,7 +678,7 @@ export default function MessageList() {
           setMessagesTotal(data.total);
           setMessages(applyReadGuard(data.messages));
           setMessagesOffset((pageNum - 1) * pageSize + data.messages.length);
-          setHasMoreMessages(false);
+          setHasMoreMessages(data.hasMore ?? false);
           setExpandedThreadId(null);
           if (listRef.current) listRef.current.scrollTop = 0;
         },
@@ -2637,7 +2639,7 @@ export default function MessageList() {
 
   const label = searchQuery.trim()
     ? `Search: "${searchQuery}"`
-    : isUnified ? t('sidebar.allInboxes') : selectedFolder;
+    : isUnified ? t('sidebar.allInboxes') : folderDisplayName((folders[selectedAccountId] || []).find(f => f.path === selectedFolder) || { path: selectedFolder }, t);
 
   const selectedFolderCounts = folders[selectedAccountId]?.find(f => f.path === selectedFolder);
   const headerUnread = isUnified ? unreadCounts.total
@@ -2857,6 +2859,9 @@ export default function MessageList() {
             ) : label}
           </h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 6 }}>
+            {searchQuery.trim() && searchCoverage === 'provider_search_limit' && (
+              <span role="status" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Leverantörssökning – resultat kan begränsas</span>
+            )}
             {!searchQuery && (
               <span title={filteredCount ? 'Cached results matching this filter' : !headerCountKnown ? 'Mailbox count not yet available' : headerCountStale ? 'Last observed mailbox count; awaiting server refresh' : 'Messages reported by the mail server'} style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
                 {filteredCount ? messagesTotal : !headerCountKnown ? '—' : `${headerCountStale ? '~' : ''}${headerServerTotal}`}
@@ -4072,8 +4077,9 @@ export default function MessageList() {
         </>)}
 
         {/* Pagination footer */}
-        {scrollMode === 'paginated' && !loadingMessages && messagesTotal > 0 && (() => {
-          const totalPages = Math.ceil(messagesTotal / pageSize) || 1;
+        {scrollMode === 'paginated' && !loadingMessages && messages.length > 0 && (() => {
+          const totalPages = messagesTotal === null ? null : Math.ceil(messagesTotal / pageSize) || 1;
+          const nextDisabled = totalPages === null ? !hasMoreMessages : currentPage >= totalPages;
           const btnStyle = (disabled) => ({
             padding: '5px 14px', fontSize: 12, borderRadius: 6, cursor: disabled ? 'default' : 'pointer',
             background: disabled ? 'transparent' : 'var(--bg-tertiary)',
@@ -4095,14 +4101,14 @@ export default function MessageList() {
                 onMouseLeave={e => { e.target.style.borderColor = 'var(--border)'; e.target.style.color = currentPage <= 1 ? 'var(--text-tertiary)' : 'var(--text-secondary)'; }}
               >← {t('messageList.prevPage')}</button>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                {t('messageList.pageOf', { current: currentPage, total: totalPages })}
+                {totalPages === null ? `Sida ${currentPage}` : t('messageList.pageOf', { current: currentPage, total: totalPages })}
               </span>
               <button
                 onClick={() => loadPage(currentPage + 1)}
-                disabled={currentPage >= totalPages}
-                style={btnStyle(currentPage >= totalPages)}
-                onMouseEnter={e => { if (currentPage < totalPages) { e.target.style.borderColor = 'var(--accent)'; e.target.style.color = 'var(--accent)'; }}}
-                onMouseLeave={e => { e.target.style.borderColor = 'var(--border)'; e.target.style.color = currentPage >= totalPages ? 'var(--text-tertiary)' : 'var(--text-secondary)'; }}
+                disabled={nextDisabled}
+                style={btnStyle(nextDisabled)}
+                onMouseEnter={e => { if (!nextDisabled) { e.target.style.borderColor = 'var(--accent)'; e.target.style.color = 'var(--accent)'; }}}
+                onMouseLeave={e => { e.target.style.borderColor = 'var(--border)'; e.target.style.color = nextDisabled ? 'var(--text-tertiary)' : 'var(--text-secondary)'; }}
               >{t('messageList.nextPage')} →</button>
             </div>
           );
