@@ -601,7 +601,7 @@ function AccountsTab() {
 
   const handleAdd = async (form) => {
     const account = await api.addAccount(form);
-    setAccounts([...accounts, account]);
+    setAccounts(window.corevoMailHosted ? await api.getAccounts() : [...accounts, account]);
     setSubview('list');
   };
 
@@ -1183,11 +1183,14 @@ function AccountsTab() {
             background: 'var(--bg-secondary)',
             display: 'flex', gap: 20, flexWrap: 'wrap',
           }}>
-            {[
+            {(window.corevoMailHosted ? [
+              ['Leverantör', { microsoft: 'Microsoft Graph', gmail: 'Gmail API', imap: 'IMAP / SMTP' }[account.provider] || account.provider],
+              ['Kontroll', account.sync_error || 'Ansluten'],
+            ] : [
               ['IMAP', `${account.imap_host}:${account.imap_port}`],
               ['SMTP', `${account.smtp_host}:${account.smtp_port}`],
               [t('admin.accounts.lastSync'), account.last_sync ? new Date(account.last_sync).toLocaleTimeString() : t('common.never')],
-            ].map(([label, val]) => (
+            ]).map(([label, val]) => (
               <div key={label} style={{ fontSize: 11 }}>
                 <span style={{ color: 'var(--text-tertiary)' }}>{label} </span>
                 <span style={{ color: 'var(--text-secondary)', fontFamily: 'JetBrains Mono, monospace' }}>{val}</span>

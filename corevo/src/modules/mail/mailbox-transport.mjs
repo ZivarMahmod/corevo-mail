@@ -416,7 +416,9 @@ export function createMailboxTransport(call, { secureTransport = false, signal, 
       if (route === '/api/accounts' && method === 'GET') return reply(await inventory());
       if (method === 'POST' && ['/api/mail/sync', '/api/mail/sync-folder', '/api/mail/sync-folders'].includes(route)) {
         if (Object.keys(body).some(key => !['accountId', 'folder'].includes(key)) || route.endsWith('sync-folder') && typeof body.accountId !== 'string') reject('invalid_request');
-        return request('/api/mail/corevo-sync', 'POST', JSON.stringify({ accountId: body.accountId ?? null, folder: route.endsWith('sync-folder') ? body.folder : 'INBOX' }));
+        const synced = await request('/api/mail/corevo-sync', 'POST', JSON.stringify({ accountId: body.accountId ?? null, folder: route.endsWith('sync-folder') ? body.folder : 'INBOX' }));
+        const failed = synced.body.items?.find(item => item.error);
+        return failed ? fail(failed.error, 502) : synced;
       }
       if (route === '/api/mail/corevo-sync' && method === 'POST') {
         if (Object.keys(body).some(key => !['accountId', 'folder'].includes(key)) || body.accountId !== null && typeof body.accountId !== 'string' || typeof body.folder !== 'string' || body.folder.length > 1024) reject('invalid_request');
@@ -544,7 +546,9 @@ export function createMailboxTransport(call, { secureTransport = false, signal, 
           || body.smtp_auth_pass && body.smtp_auth_pass !== body.auth_pass) return fail('Den valda kontokonfigurationen behöver en kompletterad Corevo-koppling. TLS-kontrollen får inte stängas av.', 422);
         const settings = { provider: body.imap_host === 'imap.one.com' && body.smtp_host === 'send.one.com' ? 'one_com' : 'imap',
           address: body.email_address, password: body.auth_pass, imapHost: body.imap_host, smtpHost: body.smtp_host, smtpPort: Number(body.smtp_port) };
-        const data = await rpc('connect-imap', { settings, profile, previousRef: null });
+        const existing = (await inventory()).find(a => a.provider === 'imap' && typeof body.email_address === 'string'
+          && a.email_address.toLowerCase() === body.email_address.toLowerCase());
+        const data = await rpc('connect-imap', { settings, profile, previousRef: existing ? ref(existing.id) : null });
         const all = await inventory();
         const connected = all.find(a => accounts.get(a.id).binding.mailboxId === data.binding.mailboxId);
         if (!connected) throw Object.assign(new Error(), { code: 'account_changed' });

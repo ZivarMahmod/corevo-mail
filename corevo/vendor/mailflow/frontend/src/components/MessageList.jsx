@@ -710,6 +710,7 @@ export default function MessageList() {
       setTimeout(() => setSyncing(false), 15000);
     } catch (err) {
       console.error('Sync failed:', err);
+      if (window.corevoMailHosted) useStore.getState().addNotification({ type: 'error', title: 'Synkningen misslyckades', body: err.message });
       setSyncing(false);
     }
   };
@@ -4375,6 +4376,13 @@ function EmptyState({ folderSyncing, searchQuery, searchError, unreadOnly, selec
         </div>
         <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--text-primary)', marginBottom: 6 }}>{t('messageList.noAccounts')}</div>
         <div style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{t('messageList.noAccountsDesc')}</div>
+        {window.corevoMailHosted && <button onClick={() => {
+          useStore.getState().setAdminTab('accounts');
+          useStore.getState().setShowAdmin(true);
+        }} style={{ marginTop: 20, padding: '10px 18px', borderRadius: 8, border: 0,
+          background: 'var(--accent)', color: 'var(--accent-text, white)', cursor: 'pointer', fontSize: 14 }}>
+          Anslut en brevlåda
+        </button>}
       </div>
     );
   }

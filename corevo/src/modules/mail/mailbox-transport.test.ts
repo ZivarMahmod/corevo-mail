@@ -17,6 +17,9 @@ test('failed provider refresh does not claim complete unread counts', async () =
   });
   const id = (await transport.request('/api/accounts')).body[0].id;
   const refresh = await transport.request('/api/mail/corevo-sync', 'POST', JSON.stringify({ accountId: id, folder: 'INBOX' }));
+  const manual = await transport.request('/api/mail/sync', 'POST', JSON.stringify({ accountId: id }));
+  expect(manual.status).toBe(502);
+  expect(manual.body.error).toContain('Synkningen kunde inte slutföras');
   expect(refresh.status).toBe(200);
   expect(refresh.body.items[0].state).toBe('unavailable');
   expect(refresh.body.counts.complete).toBe(false);
@@ -89,6 +92,29 @@ test('mount cancellation rejects a late account result without returning stale d
   const response = await pending;
   expect(response.status).toBe(409);
   expect(JSON.stringify(response)).not.toContain(account.address);
+});
+
+test('native IMAP reconnection reuses only the signed-in owner inventory and returns the new generation', async () => {
+  let current = { ...account, provider: 'imap_smtp', status: 'disconnected' };
+  const previousRef = Object.fromEntries(['mailboxId', 'connectionId', 'generation', 'scopeRevision'].map(k => [k, account.binding[k]]));
+  const calls = [];
+  const transport = createMailboxTransport(async (action, input) => {
+    calls.push([action, input]);
+    if (action === 'accounts') return result({ items: [current] });
+    expect(action).toBe('connect-imap');
+    expect(input.previousRef).toEqual(previousRef);
+    current = { ...current, status: 'connected', binding: { ...current.binding, generation: 'reconnected-generation' } };
+    return result({ binding: current.binding });
+  }, { secureTransport: true });
+  const old = (await transport.request('/api/accounts')).body[0].id;
+  const response = await transport.request('/api/accounts', 'POST', JSON.stringify({
+    email_address: account.address, auth_user: account.address, auth_pass: 'synthetic-password',
+    imap_host: 'imap.one.com', imap_port: 993, smtp_host: 'send.one.com', smtp_port: 465,
+  }));
+  expect(response.status).toBe(200);
+  expect(response.body.enabled).toBe(true);
+  expect(response.body.id).not.toBe(old);
+  expect(calls.filter(c => c[0] === 'connect-imap')).toHaveLength(1);
 });
 
 const providerFolders = [
